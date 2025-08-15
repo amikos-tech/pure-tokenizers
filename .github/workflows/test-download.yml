@@ -1,0 +1,51 @@
+name: Test Download Functionality
+
+on:
+  schedule:
+    # Run weekly to test download functionality with actual releases
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      test_version:
+        description: 'Version to test (leave empty for latest)'
+        required: false
+        type: string
+
+jobs:
+  test-download:
+    name: Test Download on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Clear any cached libraries
+      run: |
+        go run -tags ignore -c 'package main; import "pure-tokenizers"; func main() { tokenizers.ClearLibraryCache() }'
+      continue-on-error: true
+
+    - name: Test automatic download
+      env:
+        TOKENIZERS_VERSION: ${{ github.event.inputs.test_version || 'latest' }}
+      run: |
+        go test -v -run "TestDownloadFunctionality" -timeout=10m
+
+    - name: Test library info
+      run: |
+        go test -v -run "TestGetLibraryInfo"
+
+    - name: Test with environment variable override
+      env:
+        TOKENIZERS_GITHUB_REPO: ${{ github.repository }}
+        TOKENIZERS_VERSION: ${{ github.event.inputs.test_version || 'latest' }}
+      run: |
+        go test -v -run "TestDownloadFunctionality/GetAvailableVersions" -timeout=5m

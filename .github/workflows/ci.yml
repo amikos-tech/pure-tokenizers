@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-test:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Run Rust tests
+      run: cargo test --verbose
+
+    - name: Build library
+      run: cargo build --release
+
+  go-test:
+    name: Go Tests
+    runs-on: ${{ matrix.os }}
+    needs: rust-test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.24']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build Rust library
+      run: cargo build --release
+
+    - name: Set library path (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        if [ "${{ matrix.os }}" = "macos-latest" ]; then
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+        else
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        fi
+
+    - name: Set library path (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        echo "TOKENIZERS_LIB_PATH=$(pwd)\target\release\libtokenizers.dll" >> $env:GITHUB_ENV
+
+    - name: Run Go tests
+      run: |
+        go mod tidy
+        make test
+
+    - name: Run Go linting
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [rust-test, go-test]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build library
+      run: cargo build --release
+
+    - name: Test download functionality (mock)
+      run: |
+        export TOKENIZERS_LIB_PATH="$(pwd)/target/release/libtokenizers.so"
+        go test -v -run "TestDownloadFunctionality|TestGetLibraryInfo"
+
+    - name: Test library loading
+      run: |
+        export TOKENIZERS_LIB_PATH="$(pwd)/target/release/libtokenizers.so"
+        go test -v -run "TestGetCachedLibraryPath|TestCacheDirectory"

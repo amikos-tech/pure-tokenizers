@@ -1,0 +1,98 @@
+name: Cross Compilation Test
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cross-compile.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cross-compile.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cross-compile:
+    name: Cross compile ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Test additional targets that might be supported
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Additional targets for broader compatibility
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross-compilation dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: cross-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Cross compile
+      run: |
+        if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+          cross build --release --target ${{ matrix.target }}
+        else
+          cargo build --release --target ${{ matrix.target }}
+        fi
+
+    - name: Verify library exists (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] || [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+          ls -la target/${{ matrix.target }}/release/libtokenizers.dylib
+          file target/${{ matrix.target }}/release/libtokenizers.dylib
+        else
+          ls -la target/${{ matrix.target }}/release/libtokenizers.so
+          file target/${{ matrix.target }}/release/libtokenizers.so
+        fi
+
+    - name: Verify library exists (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        dir target\${{ matrix.target }}\release\libtokenizers.dll
+        file target\${{ matrix.target }}\release\libtokenizers.dll
+      shell: bash
