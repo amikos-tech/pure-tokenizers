@@ -17,26 +17,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux targets
+          # Linux GNU targets
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive-name: libtokenizers-x86_64-unknown-linux-gnu.tar.gz
+            lib-name: libtokenizers.so
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             archive-name: libtokenizers-aarch64-unknown-linux-gnu.tar.gz
-          
+            lib-name: libtokenizers.so
+
+          # Linux MUSL targets (for Alpine and other musl-based distros)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive-name: libtokenizers-x86_64-unknown-linux-musl.tar.gz
+            lib-name: libtokenizers.a
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive-name: libtokenizers-aarch64-unknown-linux-musl.tar.gz
+            lib-name: libtokenizers.a
+
           # macOS targets
           - target: x86_64-apple-darwin
             os: macos-latest
             archive-name: libtokenizers-x86_64-apple-darwin.tar.gz
+            lib-name: libtokenizers.dylib
           - target: aarch64-apple-darwin
             os: macos-latest
             archive-name: libtokenizers-aarch64-apple-darwin.tar.gz
-          
+            lib-name: libtokenizers.dylib
+
           # Windows targets
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive-name: libtokenizers-x86_64-pc-windows-msvc.tar.gz
+            lib-name: tokenizers.dll
 
     steps:
     - name: Checkout code
@@ -97,99 +112,166 @@ jobs:
       run: |
         cargo build --release --target ${{ matrix.target }}
 
-    - name: Prepare artifacts (Unix)
+    - name: Prepare release archive (Unix)
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
         set -euo pipefail
-        case "${{ matrix.target }}" in
-          *-apple-darwin)        ART="libtokenizers.dylib" ;;
-          *-unknown-linux-gnu)   ART="libtokenizers.so"    ;;
-          *-unknown-linux-musl)  ART="libtokenizers.a"     ;;  # static on musl
-          *) echo "Unknown target: ${{ matrix.target }}"; exit 1 ;;
-        esac
-        P="target/${{ matrix.target }}/release/${ART}"
-        mkdir -p artifacts
-        cp "$P" artifacts/
-        echo "Prepared artifact: $P"
-        file "artifacts/${ART}" || true
+        
+        # Create staging directory
+        mkdir -p release-staging
+        
+        # Copy the library
+        LIBRARY_PATH="target/${{ matrix.target }}/release/${{ matrix.lib-name }}"
+        if [ -f "$LIBRARY_PATH" ]; then
+          cp "$LIBRARY_PATH" "release-staging/${{ matrix.lib-name }}"
+        else
+          echo "Library not found at: $LIBRARY_PATH"
+          exit 1
+        fi
+        
+        # Generate SHA256 for the library only
+        cd release-staging
+        if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+          shasum -a 256 "${{ matrix.lib-name }}" > "${{ matrix.lib-name }}.sha256"
+        else
+          sha256sum "${{ matrix.lib-name }}" > "${{ matrix.lib-name }}.sha256"
+        fi
+        
+        # Copy README and LICENSE if they exist
+        cd ..
+        [ -f README.md ] && cp README.md release-staging/
+        [ -f LICENSE ] && cp LICENSE release-staging/
+        
+        # Create the final archive with all contents
+        cd release-staging
+        tar -czf ../${{ matrix.archive-name }} *
+        cd ..
+        
+        # Display archive contents for verification
+        echo "Archive contents:"
+        tar -tzf ${{ matrix.archive-name }}
 
     - name: Prepare artifacts (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        $art = "tokenizers.dll"
-        $p = "target/${{ matrix.target }}/release/$art"
-        mkdir -p artifacts
-        Copy-Item -Path $p -Destination "artifacts/$art"
-        Write-Host "Prepared artifact: $p"
-        Get-Item "artifacts/$art"
-
-    - name: Create archive and checksum (Unix)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        cd artifacts
-        tar -czf ../${{ matrix.archive-name }} *
-        cd ..
-        sha256sum ${{ matrix.archive-name }} > ${{ matrix.archive-name }}.sha256
-
-    - name: Create archive and checksum (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        cd artifacts
-        tar -czf ../${{ matrix.archive-name }} *
-        cd ..
-        shasum -a 256 ${{ matrix.archive-name }} > ${{ matrix.archive-name }}.sha256
-
-    - name: Create archive and checksum (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        cd artifacts
+        # Create staging directory
+        New-Item -ItemType Directory -Force -Path release-staging
+        
+        # Copy the library
+        $libraryPath = "target/${{ matrix.target }}/release/${{ matrix.lib-name }}"
+        if (Test-Path $libraryPath) {
+          Copy-Item -Path $libraryPath -Destination "release-staging/${{ matrix.lib-name }}"
+        } else {
+          Write-Error "Library not found at: $libraryPath"
+          exit 1
+        }
+        
+        # Generate SHA256 for the library only
+        Set-Location release-staging
+        $hash = Get-FileHash "${{ matrix.lib-name }}" -Algorithm SHA256
+        "$($hash.Hash)  ${{ matrix.lib-name }}" | Out-File "${{ matrix.lib-name }}.sha256" -Encoding ascii
+        
+        # Copy README and LICENSE if they exist
+        Set-Location ..
+        if (Test-Path README.md) {
+          Copy-Item -Path README.md -Destination release-staging/
+        }
+        if (Test-Path LICENSE) {
+          Copy-Item -Path LICENSE -Destination release-staging/
+        }
+        
+        # Create the final archive with all contents
+        Set-Location release-staging
         tar -czf ..\${{ matrix.archive-name }} *
-        cd ..
-        $hash = Get-FileHash "${{ matrix.archive-name }}" -Algorithm SHA256
-        $hash.Hash | Out-File "${{ matrix.archive-name }}.sha256" -Encoding ascii
+        Set-Location ..
+        
+        # Display archive contents for verification
+        Write-Host "Archive contents:"
+        tar -tzf ${{ matrix.archive-name }}
 
-    - name: Upload build artifacts
+    - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.target }}-build
-        path: |
-          ${{ matrix.archive-name }}
-          ${{ matrix.archive-name }}.sha256
+        path: ${{ matrix.archive-name }}
 
   test:
     name: Test Go bindings
     runs-on: ubuntu-latest
     needs: build
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.24'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
 
-    - name: Download Linux x86_64 artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: x86_64-unknown-linux-gnu-build
-        path: ./
+      - name: Download Linux x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x86_64-unknown-linux-gnu-build
+          path: ./
 
-    - name: Extract library for testing
-      run: |
-        mkdir -p test-lib
-        tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
-        export TOKENIZERS_LIB_PATH="$(pwd)/test-lib/libtokenizers.so"
-        echo "TOKENIZERS_LIB_PATH=$TOKENIZERS_LIB_PATH" >> $GITHUB_ENV
+      - name: Extract library for testing
+        run: |
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+          export TOKENIZERS_LIB_PATH="$(pwd)/test-lib/libtokenizers.so"
+          echo "TOKENIZERS_LIB_PATH=$TOKENIZERS_LIB_PATH" >> $GITHUB_ENV
 
-    - name: Run Go tests
-      run: |
-        go mod tidy
-        go test -v ./...
+          # Verify extraction
+          echo "Extracted files:"
+          ls -la test-lib/
 
+      - name: Run Go tests
+        run: |
+          go mod tidy
+          go test -v ./...
+
+  # Test musl build with Alpine
+  test-musl:
+    name: Test musl build on Alpine
+    runs-on: ubuntu-latest
+    needs: build
+    container:
+      image: alpine:latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apk add --no-cache go bash tar gzip
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download musl x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x86_64-unknown-linux-musl-build
+          path: ./
+
+      - name: Extract and test library
+        run: |
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-musl.tar.gz -C test-lib
+          
+          # Verify the library is compatible with musl
+          echo "Extracted files:"
+          ls -la test-lib/
+          
+          # Check that we have a static library (.a file)
+          if [ -f "test-lib/libtokenizers.a" ]; then
+            echo "Static library found: libtokenizers.a"
+            file test-lib/libtokenizers.a
+          else
+            echo "Error: Expected static library not found"
+            exit 1
+          fi
 #  release:
 #    name: Create Release
 #    runs-on: ubuntu-latest
