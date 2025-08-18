@@ -169,10 +169,8 @@ func TestDownloadFunctionality(t *testing.T) {
 }
 
 func TestFromFile(t *testing.T) {
-	if _, err := os.Stat("target/debug/libtokenizers.dylib"); os.IsNotExist(err) {
-		t.Skip("Skipping test because target/debug/libtokenizers.dylib does not exist")
-	}
-	tok, err := FromFile("./tokenizer.json", WithLibraryPath("target/debug/libtokenizers.dylib"))
+	libpath := checkLibraryExists(t)
+	tok, err := FromFile("./tokenizer.json", WithLibraryPath(libpath))
 	require.NoError(t, err, "Failed to load tokenizer from file")
 	t.Cleanup(func() {
 		_ = tok.Close()
