@@ -349,7 +349,16 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	var buff Buffer
 	rc := t.encode(t.tokenizerh, message, &options, &buff)
 	if rc < 0 {
-		return nil, fmt.Errorf("failed to encode message, error code: %d", rc)
+		switch rc {
+		case -1:
+			return nil, fmt.Errorf("invalid UTF-8 in input message")
+		case -2:
+			return nil, fmt.Errorf("tokenization failed")
+		case -3:
+			return nil, fmt.Errorf("internal error: null output buffer")
+		default:
+			return nil, fmt.Errorf("unknown error code: %d", rc)
+		}
 	}
 	defer func() {
 		t.freeBuffer(&buff)
@@ -364,15 +373,11 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	specialTokensMask, attentionMask := MasksFromBuf(buff)
 	if specialTokensMask != nil {
 		result.SpecialTokensMask = make([]uint32, 0, len(specialTokensMask))
-		for _, id := range specialTokensMask {
-			result.SpecialTokensMask = append(result.SpecialTokensMask, id)
-		}
+		result.SpecialTokensMask = append(result.SpecialTokensMask, specialTokensMask...)
 	}
 	if attentionMask != nil {
 		result.AttentionMask = make([]uint32, 0, len(attentionMask))
-		for _, id := range attentionMask {
-			result.AttentionMask = append(result.AttentionMask, id)
-		}
+		result.AttentionMask = append(result.AttentionMask, attentionMask...)
 	}
 	result.Tokens = TokensFromBuf(buff)
 	if buff.Offsets != nil {

@@ -6,6 +6,11 @@ use std::ptr;
 use tokenizers::tokenizer::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy, TruncationStrategy};
 
+// At the top of lib.rs
+const ERROR_INVALID_UTF8: i32 = -1;
+const ERROR_ENCODING_FAILED: i32 = -2;
+const ERROR_NULL_OUTPUT: i32 = -3;
+
 #[repr(C)]
 pub struct TruncationOptions {
     enabled: bool,
@@ -131,12 +136,13 @@ pub unsafe extern "C" fn encode(
     let message_cstr = unsafe { CStr::from_ptr(message) };
     let message = message_cstr.to_str();
     if message.is_err() {
-        return -1; // Return -1 if the message cannot be converted to a string
+        return ERROR_INVALID_UTF8; // Return -1 if the message cannot be converted to a string
     }
 
-    let encoding = tokenizer
-        .encode(message.unwrap(), options.add_special_tokens)
-        .expect("failed to encode input");
+    let encoding = match tokenizer.encode(message.unwrap(), options.add_special_tokens) {
+        Ok(enc) => enc,
+        Err(_) => return ERROR_ENCODING_FAILED,
+    };
     let mut vec_ids = encoding.get_ids().to_vec();
     vec_ids.shrink_to_fit();
     let ids = vec_ids.as_mut_ptr();
@@ -201,6 +207,9 @@ pub unsafe extern "C" fn encode(
             offsets,
             len,
         };
+    } else {
+        // If out is null, we cannot return the results, so we return an error code
+        return ERROR_NULL_OUTPUT; // Return -3 if the output buffer is null
     }
     0
 }
