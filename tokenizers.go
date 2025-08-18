@@ -193,7 +193,6 @@ type Tokenizer struct {
 	fromFile            func(config string) unsafe.Pointer
 	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
-	freeBuffer          func(buffer Buffer)
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) *string
@@ -292,9 +291,7 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	tokenizer.libh = libh
 	purego.RegisterLibFunc(&tokenizer.fromFile, tokenizer.libh, "from_file")
 	purego.RegisterLibFunc(&tokenizer.fromBytes, tokenizer.libh, "from_bytes")
-	//purego.RegisterLibFunc(&tokenizer.fromBytesWithTruncation, tokenizer.libh, "from_bytes_with_truncation")
 	purego.RegisterLibFunc(&tokenizer.encode, tokenizer.libh, "encode")
-	purego.RegisterLibFunc(&tokenizer.freeBuffer, tokenizer.libh, "free_buffer")
 	purego.RegisterLibFunc(&tokenizer.freeTokenizer, tokenizer.libh, "free_tokenizer")
 	purego.RegisterLibFunc(&tokenizer.freeString, tokenizer.libh, "free_string")
 	purego.RegisterLibFunc(&tokenizer.decode, tokenizer.libh, "decode")
