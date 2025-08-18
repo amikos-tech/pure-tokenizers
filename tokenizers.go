@@ -194,6 +194,7 @@ type Tokenizer struct {
 	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
+	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) *string
 	vocabSize           func(ptr unsafe.Pointer) uint32
@@ -292,6 +293,7 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.fromFile, tokenizer.libh, "from_file")
 	purego.RegisterLibFunc(&tokenizer.fromBytes, tokenizer.libh, "from_bytes")
 	purego.RegisterLibFunc(&tokenizer.encode, tokenizer.libh, "encode")
+	purego.RegisterLibFunc(&tokenizer.freeBuffer, tokenizer.libh, "free_buffer")
 	purego.RegisterLibFunc(&tokenizer.freeTokenizer, tokenizer.libh, "free_tokenizer")
 	purego.RegisterLibFunc(&tokenizer.freeString, tokenizer.libh, "free_string")
 	purego.RegisterLibFunc(&tokenizer.decode, tokenizer.libh, "decode")
@@ -349,19 +351,28 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	if rc < 0 {
 		return nil, fmt.Errorf("failed to encode message, error code: %d", rc)
 	}
+	defer func() {
+		t.freeBuffer(&buff)
+	}()
 	result := &EncodeResult{}
 	if buff.IDs != nil {
-		result.IDs = unsafe.Slice(buff.IDs, buff.Len)
+		result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...)
 	}
 	if buff.TypeIDs != nil {
-		result.TypeIDs = unsafe.Slice(buff.TypeIDs, buff.Len)
+		result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...)
 	}
 	specialTokensMask, attentionMask := MasksFromBuf(buff)
 	if specialTokensMask != nil {
-		result.SpecialTokensMask = specialTokensMask
+		result.SpecialTokensMask = make([]uint32, 0, len(specialTokensMask))
+		for _, id := range specialTokensMask {
+			result.SpecialTokensMask = append(result.SpecialTokensMask, id)
+		}
 	}
 	if attentionMask != nil {
-		result.AttentionMask = attentionMask
+		result.AttentionMask = make([]uint32, 0, len(attentionMask))
+		for _, id := range attentionMask {
+			result.AttentionMask = append(result.AttentionMask, id)
+		}
 	}
 	result.Tokens = TokensFromBuf(buff)
 	if buff.Offsets != nil {

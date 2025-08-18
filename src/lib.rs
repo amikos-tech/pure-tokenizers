@@ -273,7 +273,12 @@ pub extern "C" fn free_tokenizer(ptr: *mut ::libc::c_void) {
 }
 
 #[no_mangle]
-pub extern "C" fn free_buffer(buf: Buffer) {
+pub extern "C" fn free_buffer(buf: *mut Buffer) {
+    if buf.is_null() {
+        return;
+    }
+    let buf = unsafe { &mut *buf };
+    // Free the memory allocated for the fields in the Buffer struct
     if !buf.ids.is_null() {
         unsafe {
             Vec::from_raw_parts(buf.ids, buf.len, buf.len);

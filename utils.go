@@ -40,7 +40,8 @@ func TokensFromBuf(buf Buffer) []string {
 		for *(*byte)(unsafe.Add(q, n)) != 0 {
 			n++
 		}
-		out = append(out, unsafe.String((*byte)(q), int(n)))
+		b := unsafe.Slice((*byte)(q), n)
+		out = append(out, string(b))
 	}
 	return out
 }
