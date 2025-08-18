@@ -2,6 +2,12 @@
 
 package tokenizers
 
+import (
+	"fmt"
+	"golang.org/x/sys/windows"
+	"os"
+)
+
 func loadLibrary(path string) (uintptr, error) {
 	handle, err := windows.LoadLibrary(path)
 	if err != nil {
