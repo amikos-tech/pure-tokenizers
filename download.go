@@ -14,8 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/ebitengine/purego"
 )
 
 const (
@@ -314,20 +312,6 @@ func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	}
 
 	return nil
-}
-
-// isLibraryValid checks if the library file exists and is valid
-func isLibraryValid(path string) bool {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return false
-	}
-
-	// Try to load the library to verify it's valid
-	if libh, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL); err == nil {
-		_ = purego.Dlclose(libh)
-		return true
-	}
-	return false
 }
 
 // DownloadAndCacheLibrary downloads and caches the library for the current platform

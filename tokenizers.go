@@ -2,11 +2,12 @@ package tokenizers
 
 import (
 	"fmt"
-	"github.com/ebitengine/purego"
 	"os"
 	"path/filepath"
 	"runtime"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
 )
 
 type TruncationDirection uint8
@@ -220,17 +221,6 @@ func getLibraryName() string {
 	}
 }
 
-func loadLibrary(path string) (uintptr, error) {
-	libh, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return 0, fmt.Errorf("failed to load shared library: %w", err)
-	}
-	if libh == 0 {
-		return 0, fmt.Errorf("shared library handle is nil after loading: %s", path)
-	}
-	return libh, nil
-}
-
 func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
 	// 1. Check explicit user path
 	if userProvidedPath != "" {
@@ -340,7 +330,7 @@ func (t *Tokenizer) Close() error {
 		t.freeTokenizer(t.tokenizerh)
 		t.tokenizerh = nil
 	}
-	err := purego.Dlclose(t.libh)
+	err := closeLibrary(t.libh)
 	if err != nil {
 		return fmt.Errorf("failed to close shared library: %w", err)
 	}
