@@ -6,6 +6,8 @@ on:
 permissions:
   actions: write
   packages: write
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
