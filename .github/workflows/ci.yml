@@ -68,6 +68,9 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Install cargo-zigbuild
+      run: cargo install cargo-zigbuild
+
     - name: Cache cargo registry
       uses: actions/cache@v4
       with:
