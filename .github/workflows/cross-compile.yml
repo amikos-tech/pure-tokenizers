@@ -75,8 +75,15 @@ jobs:
     - name: Install cross
       run: cargo install cross --git https://github.com/cross-rs/cross
 
-    - name: Clean target dir
+    - name: Clean target dir (Unix)
+      if: matrix.os != 'windows-latest'
+      shell: bash
       run: rm -rf target
+
+    - name: Clean target dir (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: Remove-Item -Recurse -Force target
 
     - name: Cross compile (Unix)
       if: matrix.os == 'ubuntu-latest'
