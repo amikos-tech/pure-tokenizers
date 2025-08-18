@@ -85,16 +85,11 @@ jobs:
       shell: pwsh
       run: Remove-Item -Recurse -Force target
 
-    - name: Cross compile (Unix)
+    - name: Cross compile (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
         cross build --release --target ${{ matrix.target }}
-#      run: |
-#        if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-#          cross build --release --target ${{ matrix.target }}
-#        else
-#          cargo build --release --target ${{ matrix.target }}
-#        fi
+
     - name: Cross compile (macOS)
       if: matrix.os == 'macos-latest'
       run: |

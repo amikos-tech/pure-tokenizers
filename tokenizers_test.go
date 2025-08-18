@@ -12,6 +12,14 @@ import (
 func checkLibraryExists(t *testing.T) string {
 	var libPath string
 
+	if os.Getenv("TOKENIZERS_LIB_PATH") != "" {
+		libPath = os.Getenv("TOKENIZERS_LIB_PATH")
+		t.Logf("Using library path from environment: %s", libPath)
+		if _, err := os.Stat(libPath); os.IsNotExist(err) {
+			t.Skipf("Skipping test because %s does not exist", libPath)
+			return ""
+		}
+	}
 	switch runtime.GOOS {
 	case "windows":
 		libPath = "target/debug/tokenizers.dll"
