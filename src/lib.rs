@@ -203,15 +203,6 @@ pub unsafe extern "C" fn encode(
         };
     }
     0
-    // Buffer {
-    //     ids,
-    //     type_ids,
-    //     special_tokens_mask,
-    //     attention_mask,
-    //     tokens,
-    //     offsets,
-    //     len,
-    // }
 }
 /// # Safety
 /// The caller must ensure that `ptr` is a valid pointer to a heap-allocated Tokenizer object
@@ -272,12 +263,15 @@ pub extern "C" fn free_tokenizer(ptr: *mut ::libc::c_void) {
     }
 }
 
+/// # Safety
+/// The caller must ensure that `buf` is a valid pointer to a `Buffer` struct
+/// previously returned by the `encode` function.
 #[no_mangle]
-pub extern "C" fn free_buffer(buf: *mut Buffer) {
+pub unsafe extern "C" fn free_buffer(buf: *mut Buffer) {
     if buf.is_null() {
         return;
     }
-    let buf = unsafe { &mut *buf };
+    let buf = &mut *buf;
     // Free the memory allocated for the fields in the Buffer struct
     if !buf.ids.is_null() {
         unsafe {
