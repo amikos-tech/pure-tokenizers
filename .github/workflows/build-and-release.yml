@@ -80,7 +80,7 @@ jobs:
     - name: Clean target dir (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
-      run: Remove-Item -Recurse -Force target
+      run: Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
 
     - name: Build library (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -126,12 +126,20 @@ jobs:
         Get-Item "artifacts/$art"
 
     - name: Create archive and checksum (Unix)
-      if: matrix.os != 'windows-latest'
+      if: matrix.os == 'ubuntu-latest'
       run: |
         cd artifacts
         tar -czf ../${{ matrix.archive-name }} *
         cd ..
         sha256sum ${{ matrix.archive-name }} > ${{ matrix.archive-name }}.sha256
+
+    - name: Create archive and checksum (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cd artifacts
+        tar -czf ../${{ matrix.archive-name }} *
+        cd ..
+        shasum -a 256 ${{ matrix.archive-name }} > ${{ matrix.archive-name }}.sha256
 
     - name: Create archive and checksum (Windows)
       if: matrix.os == 'windows-latest'
