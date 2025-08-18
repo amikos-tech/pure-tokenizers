@@ -192,7 +192,7 @@ type Tokenizer struct {
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
 	fromFile            func(config string) unsafe.Pointer
 	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
-	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions) Buffer
+	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeBuffer          func(buffer Buffer)
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeString          func(ptr *string)
@@ -347,7 +347,11 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 			return nil, fmt.Errorf("failed to apply encoding option: %w", err)
 		}
 	}
-	buff := t.encode(t.tokenizerh, message, &options)
+	var buff Buffer
+	rc := t.encode(t.tokenizerh, message, &options, &buff)
+	if rc < 0 {
+		return nil, fmt.Errorf("failed to encode message, error code: %d", rc)
+	}
 	result := &EncodeResult{}
 	if buff.IDs != nil {
 		result.IDs = unsafe.Slice(buff.IDs, buff.Len)

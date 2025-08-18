@@ -119,7 +119,8 @@ pub unsafe extern "C" fn encode(
     ptr: *mut libc::c_void,
     message: *const libc::c_char,
     options: &EncodeOptions,
-) -> Buffer {
+    out: *mut Buffer,
+) -> i32 {
     let tokenizer: &Tokenizer;
     unsafe {
         tokenizer = ptr
@@ -130,15 +131,7 @@ pub unsafe extern "C" fn encode(
     let message_cstr = unsafe { CStr::from_ptr(message) };
     let message = message_cstr.to_str();
     if message.is_err() {
-        return Buffer {
-            ids: ptr::null_mut(),
-            tokens: ptr::null_mut(),
-            len: 0,
-            type_ids: ptr::null_mut(),
-            special_tokens_mask: ptr::null_mut(),
-            attention_mask: ptr::null_mut(),
-            offsets: ptr::null_mut(),
-        };
+        return -1; // Return -1 if the message cannot be converted to a string
     }
 
     let encoding = tokenizer
@@ -198,16 +191,27 @@ pub unsafe extern "C" fn encode(
         offsets = vec_offsets.as_mut_ptr();
         std::mem::forget(vec_offsets);
     }
-
-    Buffer {
-        ids,
-        type_ids,
-        special_tokens_mask,
-        attention_mask,
-        tokens,
-        offsets,
-        len,
+    if !out.is_null() {
+        *out = Buffer {
+            ids,
+            type_ids,
+            special_tokens_mask,
+            attention_mask,
+            tokens,
+            offsets,
+            len,
+        };
     }
+    0
+    // Buffer {
+    //     ids,
+    //     type_ids,
+    //     special_tokens_mask,
+    //     attention_mask,
+    //     tokens,
+    //     offsets,
+    //     len,
+    // }
 }
 /// # Safety
 /// The caller must ensure that `ptr` is a valid pointer to a heap-allocated Tokenizer object
