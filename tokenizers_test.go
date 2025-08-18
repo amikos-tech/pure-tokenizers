@@ -1,12 +1,34 @@
 package tokenizers
 
 import (
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func checkLibraryExists(t *testing.T) string {
+	var libPath string
+
+	switch runtime.GOOS {
+	case "windows":
+		libPath = "target/debug/tokenizers.dll"
+	case "darwin":
+		libPath = "target/debug/libtokenizers.dylib"
+	case "linux":
+		libPath = "target/debug/libtokenizers.so"
+	default:
+		t.Skipf("Unsupported platform: %s", runtime.GOOS)
+		return ""
+	}
+
+	if _, err := os.Stat(libPath); os.IsNotExist(err) {
+		t.Skipf("Skipping test because %s does not exist", libPath)
+	}
+	return libPath
+}
 
 func TestGetPlatformAssetName(t *testing.T) {
 	assetName := getPlatformAssetName()
@@ -170,12 +192,10 @@ func TestFromFile(t *testing.T) {
 }
 
 func TestFromBytes(t *testing.T) {
-	if _, err := os.Stat("target/debug/libtokenizers.dylib"); os.IsNotExist(err) {
-		t.Skip("Skipping test because target/debug/libtokenizers.dylib does not exist")
-	}
+	libpath := checkLibraryExists(t)
 	data, err := os.ReadFile("./tokenizer.json")
 	require.NoError(t, err, "Failed to read tokenizer file")
-	tok, err := FromBytes(data, WithLibraryPath("target/debug/libtokenizers.dylib"))
+	tok, err := FromBytes(data, WithLibraryPath(libpath))
 	require.NoError(t, err, "Failed to load tokenizer from file")
 	t.Cleanup(func() {
 		_ = tok.Close()
@@ -195,11 +215,9 @@ func TestFromBytes(t *testing.T) {
 }
 
 func TestFromFileWithTruncation(t *testing.T) {
-	if _, err := os.Stat("target/debug/libtokenizers.dylib"); os.IsNotExist(err) {
-		t.Skip("Skipping test because target/debug/libtokenizers.dylib does not exist")
-	}
+	libpath := checkLibraryExists(t)
 	tok, err := FromFile("./tokenizer.json",
-		WithLibraryPath("target/debug/libtokenizers.dylib"),
+		WithLibraryPath(libpath),
 		WithTruncation(256, TruncationDirectionDefault, TruncationStrategyDefault),
 	)
 	require.NoError(t, err, "Failed to load tokenizer from file")
@@ -221,11 +239,9 @@ func TestFromFileWithTruncation(t *testing.T) {
 }
 
 func TestFromFileWithPadding(t *testing.T) {
-	if _, err := os.Stat("target/debug/libtokenizers.dylib"); os.IsNotExist(err) {
-		t.Skip("Skipping test because target/debug/libtokenizers.dylib does not exist")
-	}
+	libpath := checkLibraryExists(t)
 	tok, err := FromFile("./tokenizer.json",
-		WithLibraryPath("target/debug/libtokenizers.dylib"),
+		WithLibraryPath(libpath),
 		WithPadding(true, PaddingStrategy{Tag: PaddingStrategyFixed, FixedSize: 256}),
 	)
 	require.NoError(t, err, "Failed to load tokenizer from file")
