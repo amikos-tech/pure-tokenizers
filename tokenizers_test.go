@@ -19,6 +19,7 @@ func checkLibraryExists(t *testing.T) string {
 			t.Skipf("Skipping test because %s does not exist", libPath)
 			return ""
 		}
+		return libPath
 	}
 	switch runtime.GOOS {
 	case "windows":
