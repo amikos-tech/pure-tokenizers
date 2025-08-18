@@ -70,11 +70,13 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
         key: cross-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Install cross
       run: cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Clean target dir
+      run: rm -rf target
 
     - name: Cross compile (Unix)
       if: matrix.os == 'ubuntu-latest'
