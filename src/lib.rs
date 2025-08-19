@@ -1,7 +1,6 @@
 mod build;
 
 use std::ffi::CStr;
-use std::path::PathBuf;
 use std::ptr;
 use tokenizers::tokenizer::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy, TruncationStrategy};
@@ -152,8 +151,7 @@ pub unsafe extern "C" fn from_bytes(
         }));
     }
 
-    let raw = Box::into_raw(Box::new(tok));
-    out.tokenizer = raw;
+    out.tokenizer = Box::into_raw(Box::new(tok));
     SUCCESS
 }
 
@@ -177,12 +175,11 @@ pub unsafe extern "C" fn from_file(config: *const libc::c_char, out: &mut Tokeni
         }
     };
 
-    let config_path = PathBuf::from(config_str);
+    let config_path = std::path::Path::new(config_str);
 
     match Tokenizer::from_file(config_path) {
         Ok(tok) => {
-            let raw = Box::into_raw(Box::new(tok));
-            out.tokenizer = raw;
+            out.tokenizer = Box::into_raw(Box::new(tok));
             SUCCESS
         }
         Err(e) => {
