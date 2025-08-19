@@ -37,15 +37,18 @@ import (
 )
 
 func main() {
-    // Create tokenizer with automatic library download
-    tokenizer, err := tokenizers.FromFile("tokenizer.json", 
-        tokenizers.WithDownloadLibrary())
+    // Create tokenizer with automatic library download (unless already cached)
+    tokenizer, err := tokenizers.FromFile("tokenizer.json")
     if err != nil {
         log.Fatal(err)
     }
     defer tokenizer.Close()
-    
-    // Use the tokenizer...
+
+	res, err := tokenizer.Encode("Hello, world!")
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Tokens:", res.Tokens)
 }
 ```
 
@@ -54,6 +57,7 @@ func main() {
 If you prefer to manage the library yourself:
 
 ```go
+// get library from https://github.com/amikos-tech/pure-tokenizers/releases
 tokenizer, err := tokenizers.FromFile("tokenizer.json", 
     tokenizers.WithLibraryPath("/path/to/libtokenizers.so"))
 ```
@@ -66,6 +70,7 @@ The library automatically downloads platform-specific binaries from GitHub relea
 
 - **macOS**: `libtokenizers-{arch}-apple-darwin.tar.gz`
 - **Linux**: `libtokenizers-{arch}-unknown-linux-gnu.tar.gz`  
+- **Linux Musl (Alpine)**: `libtokenizers-{arch}-unknown-linux-musl.tar.gz`
 - **Windows**: `libtokenizers-{arch}-pc-windows-msvc.tar.gz`
 
 ### Cache Locations
@@ -83,7 +88,7 @@ Downloaded libraries are cached in platform-appropriate directories:
 err := tokenizers.DownloadAndCacheLibrary()
 
 // Download specific version
-err := tokenizers.DownloadAndCacheLibraryWithVersion("v1.0.0")
+err := tokenizers.DownloadAndCacheLibraryWithVersion("v0.1.0")
 
 // Get cache path
 path := tokenizers.GetCachedLibraryPath()
@@ -128,11 +133,7 @@ make test
 make test-v2
 ```
 
-### Cross-platform Build
-
-The project supports cross-compilation using zigbuild for consistent builds across platforms.
-
 ## License
 
-[License information here]
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 

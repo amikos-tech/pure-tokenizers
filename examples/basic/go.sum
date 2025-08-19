@@ -1,0 +1,10 @@
+github.com/amikos-tech/pure-tokenizers v0.0.1 h1:d9Cdw/AcfZ/EA4fhynwh1ZF4jHIr9+vPkpO3QhSsWTc=
+github.com/amikos-tech/pure-tokenizers v0.0.1/go.mod h1:IQyCnhQPIRf5RanckuwadijTo8PyQ7WpEt3mwHcfjxM=
+github.com/amikos-tech/pure-tokenizers v0.0.2-0.20250819144926-3e172496a618 h1:z84prXLFxhYIVdq58EheiyhoTSkynA2QewmarFTm2bI=
+github.com/amikos-tech/pure-tokenizers v0.0.2-0.20250819144926-3e172496a618/go.mod h1:IQyCnhQPIRf5RanckuwadijTo8PyQ7WpEt3mwHcfjxM=
+github.com/ebitengine/purego v0.8.4 h1:CF7LEKg5FFOsASUj0+QwaXf8Ht6TlFxg09+S9wz0omw=
+github.com/ebitengine/purego v0.8.4/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
+github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+golang.org/x/sys v0.35.0 h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
+golang.org/x/sys v0.35.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=

@@ -213,15 +213,6 @@ func WithPadding(enabled bool, strategy PaddingStrategy) TokenizerOption {
 	}
 }
 
-func WithDownloadLibrary() TokenizerOption {
-	return func(t *Tokenizer) error {
-		// Set library path to cache location - download will happen automatically in LoadTokenizerLibrary
-		cacheDir := getCacheDir()
-		t.LibraryPath = filepath.Join(cacheDir, getLibraryName())
-		return nil
-	}
-}
-
 type Tokenizer struct {
 	LibraryPath         string // Path to the shared library
 	libh                uintptr
