@@ -206,7 +206,7 @@ func fetchLatestRelease(url string) (*GitHubRelease, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API request failed with status %d: %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("GitHub API request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
 	}
 
 	var release GitHubRelease
