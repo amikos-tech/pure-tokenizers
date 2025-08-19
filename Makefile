@@ -32,6 +32,19 @@ test: gotestsum-bin build
         -coverprofile=coverage.out \
         -timeout=30m
 
+# this is meant to run in CI environments where the library path is set up correctly
+.PHONY: test-ci
+test: gotestsum-bin
+	gotestsum \
+        --format short-verbose \
+        --rerun-fails=5 \
+        --packages="./..." \
+        --junitfile unit.xml \
+        -- \
+        -v \
+        -coverprofile=coverage.out \
+        -timeout=30m
+
 .PHONY: test-lib-path
 test-lib-path: gotestsum-bin build
 	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \

@@ -138,7 +138,7 @@ jobs:
     - name: Run Go tests
       run: |
         go mod tidy
-        make test
+        make test-ci
 
     
 
