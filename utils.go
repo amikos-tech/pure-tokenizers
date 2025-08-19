@@ -17,7 +17,7 @@ func MasksFromBuf(buf Buffer) (special, attention []uint32) {
 		special = unsafe.Slice(buf.SpecialTokensMask, n)
 
 	}
-	if buf.AttentionMask == nil {
+	if buf.AttentionMask != nil {
 		attention = unsafe.Slice(buf.AttentionMask, n)
 	}
 
