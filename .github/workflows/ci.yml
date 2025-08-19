@@ -80,14 +80,47 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Build Rust library
-      if: matrix.os != 'windows-latest'
-      run: cargo zigbuild --release
+      # macOS: native toolchain
+    - name: Build & set TOKENIZERS_LIB_PATH (macOS)
+      if: matrix.os == 'macos-latest'
+      shell: bash
+      run: |
+        set -euo pipefail
+        LIB_PATH="$(
+          cargo build --release --message-format=json |
+          jq -r 'select(.reason=="compiler-artifact")
+                 | select(.target.kind[]=="cdylib")
+                 | .filenames[]
+                 | select(endswith(".dylib"))' | head -n1
+        )"
+        echo "TOKENIZERS_LIB_PATH=$LIB_PATH" >> "$GITHUB_ENV"
+        echo "Using $LIB_PATH"
+
+    # Linux: zigbuild for portable glibc/musl
+    - name: Build & set TOKENIZERS_LIB_PATH (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Optionally set a target, e.g. x86_64-unknown-linux-gnu or -musl
+        TARGET="${{ matrix.target || '' }}"
+        ARGS=(--release --message-format=json)
+        [[ -n "$TARGET" ]] && ARGS+=(--target "$TARGET")
+
+        LIB_PATH="$(
+          cargo zigbuild "${ARGS[@]}" |
+          jq -r 'select(.reason=="compiler-artifact")
+                 | select(.target.kind[]=="cdylib")
+                 | .filenames[]
+                 | select(endswith(".so"))' | head -n1
+        )"
+        echo "TOKENIZERS_LIB_PATH=$LIB_PATH" >> "$GITHUB_ENV"
+        echo "Using $LIB_PATH"
 
     - name: Build Rust library (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        $dll = cargo zigbuild --release --message-format=json `
+        $dll = cargo build --release --message-format=json `
         | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
         | ? { $_.reason -eq "compiler-artifact" -and $_.target.kind -contains "cdylib" } `
         | % { $_.filenames } | ? { $_ -like "*.dll" } `
@@ -95,21 +128,6 @@ jobs:
         | Select-Object -ExpandProperty FullName -First 1
         
         "TOKENIZERS_LIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append
-        
-
-    - name: Set library path (Unix)
-      if: matrix.os != 'windows-latest'
-      run: |
-        if [ "${{ matrix.os }}" = "macos-latest" ]; then
-          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
-        else
-          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
-        fi
-
-#    - name: Set library path (Windows)
-#      if: matrix.os == 'windows-latest'
-#      run: |
-#        echo "TOKENIZERS_LIB_PATH=$(pwd)\target\release\libtokenizers.dll" >> $env:GITHUB_ENV
 
     - name: Run Go tests
       run: |
