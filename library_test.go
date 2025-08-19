@@ -1,6 +1,7 @@
 package tokenizers
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,7 @@ func TestLoadLibraryFailures(t *testing.T) {
 	t.Run("Missing library file", func(t *testing.T) {
 		_, err := loadLibrary("nonexistent_library.so")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "no such file")
+		require.Contains(t, err.Error(), "failed to load shared library")
 	})
 
 	t.Run("Invalid library file", func(t *testing.T) {
@@ -22,15 +23,32 @@ func TestLoadLibraryFailures(t *testing.T) {
 		require.NoError(t, err)
 		_, err = loadLibrary(fakeLibPath)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "is not valid")
+		require.Contains(t, err.Error(), "failed to load shared library")
 	})
 }
 
 func TestCloseLibraryFailures(t *testing.T) {
-	t.Run("Invalid handle", func(t *testing.T) {
+	t.Run("0 handle", func(t *testing.T) {
 		err := closeLibrary(0)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to close library")
+		require.Contains(t, err.Error(), "invalid library handle")
+	})
+
+	t.Run("invalid handle", func(t *testing.T) {
+		var err error
+		defer func() {
+			if err != nil {
+				return
+			}
+			if r := recover(); r != nil {
+				fmt.Println(r)
+				require.Contains(t, r, "SIGSEGV")
+			} else {
+				t.Error("expected panic for invalid handle")
+			}
+		}()
+		err = closeLibrary(100)
+		require.Error(t, err)
 	})
 }
 

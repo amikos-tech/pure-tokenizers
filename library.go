@@ -33,6 +33,9 @@ func isLibraryValid(path string) bool {
 }
 
 func closeLibrary(handle uintptr) error {
+	if handle == 0 {
+		return errors.New("invalid library handle")
+	}
 	if err := purego.Dlclose(handle); err != nil {
 		return errors.Errorf("failed to close library: %s", err.Error())
 	}
