@@ -62,8 +62,22 @@ func DownloadLibraryFromGitHub(destPath string) error {
 // downloadFile downloads a file from the given URL to the destination path
 func downloadFile(url, dest string) error {
 	client := &http.Client{Timeout: DownloadTimeout}
+	req, _ := http.NewRequest("GET",
+		url, nil)
 
-	resp, err := client.Get(url)
+	// Headers required/recommended by GitHub
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVer)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download from %s: %w", url, err)
 	}
