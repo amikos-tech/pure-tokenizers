@@ -10,6 +10,7 @@ use tokenizers::{PaddingParams, PaddingStrategy, TruncationStrategy};
 const ERROR_INVALID_UTF8: i32 = -1;
 const ERROR_ENCODING_FAILED: i32 = -2;
 const ERROR_NULL_OUTPUT: i32 = -3;
+const ERROR_INVALID_TOKENIZER_REF: i32 = -4;
 
 #[repr(C)]
 pub struct TruncationOptions {
@@ -60,7 +61,7 @@ pub unsafe extern "C" fn from_bytes(
     };
 
     let opts = unsafe { &*opts };
-    tok.set_encode_special_tokens(opts.add_special_tokens); // controls BOS/EOS/etc. insertion.  [oai_citation:3‡Docs.rs](https://docs.rs/tokenizers/latest/tokenizers/tokenizer/struct.Tokenizer.html?utm_source=chatgpt.com)
+    tok.set_encode_special_tokens(opts.add_special_tokens);
 
     if opts.trunc.enabled {
         use tokenizers::tokenizer::{TruncationDirection, TruncationParams};
@@ -81,7 +82,7 @@ pub unsafe extern "C" fn from_bytes(
             strategy: strat,
             stride: opts.trunc.stride,
         }))
-        .unwrap(); // length cap + side strategy.  [oai_citation:4‡GitHub](https://github.com/huggingface/tokenizers/blob/main/tokenizers/src/tokenizer/mod.rs?utm_source=chatgpt.com) [oai_citation:5‡Hugging Face](https://huggingface.co/docs/transformers/en/fast_tokenizers?utm_source=chatgpt.com)
+        .unwrap();
     }
     if opts.pad.enabled {
         tok.with_padding(Some(PaddingParams {
@@ -126,13 +127,10 @@ pub unsafe extern "C" fn encode(
     options: &EncodeOptions,
     out: *mut Buffer,
 ) -> i32 {
-    let tokenizer: &Tokenizer;
-    unsafe {
-        tokenizer = ptr
-            .cast::<Tokenizer>()
-            .as_ref()
-            .expect("failed to cast tokenizer");
-    }
+    let tokenizer: &Tokenizer = match ptr.cast::<Tokenizer>().as_ref() {
+        Some(t) => t,
+        None => return ERROR_INVALID_TOKENIZER_REF, // Return -4 if the tokenizer reference is invalid
+    };
     let message_cstr = unsafe { CStr::from_ptr(message) };
     let message = message_cstr.to_str();
     if message.is_err() {
