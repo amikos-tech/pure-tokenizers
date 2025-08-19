@@ -29,6 +29,23 @@ const (
 	ErrInvalidOptions          = -14
 )
 
+// result structs
+
+type TokenizerResult struct {
+	Tokenizer unsafe.Pointer
+	ErrorCode int32
+}
+
+type StringResult struct {
+	String    *string
+	ErrorCode int32
+}
+
+type VocabSizeResult struct {
+	VocabSize uint32
+	ErrorCode int32
+}
+
 type TruncationDirection uint8
 
 type TruncationStrategy uint8
@@ -165,7 +182,7 @@ type TokenizerOption func(t *Tokenizer) error
 func WithLibraryPath(path string) TokenizerOption {
 	return func(t *Tokenizer) error {
 		if path == "" {
-			return errors.Errorf("library path cannot be empty")
+			return errors.New("library path cannot be empty")
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return errors.Errorf("shared library does not exist at path: %s", path)
@@ -178,7 +195,7 @@ func WithLibraryPath(path string) TokenizerOption {
 func WithTruncation(maxLen uintptr, direction TruncationDirection, strategy TruncationStrategy) TokenizerOption {
 	return func(t *Tokenizer) error {
 		if maxLen == 0 {
-			return errors.Errorf("truncation max length must be greater than 0")
+			return errors.New("truncation max length must be greater than 0")
 		}
 		t.TruncationEnabled = true
 		t.TruncationMaxLength = maxLen
@@ -209,15 +226,14 @@ type Tokenizer struct {
 	LibraryPath         string // Path to the shared library
 	libh                uintptr
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
-	fromFile            func(config string) unsafe.Pointer
-	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
+	fromFile            func(config string) TokenizerResult
+	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) TokenizerResult
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr *string)
-	getLastErrorCore    func() int32 // Function to get the last error code from the library
-	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) *string
-	vocabSize           func(ptr unsafe.Pointer) uint32
+	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) StringResult
+	vocabSize           func(ptr unsafe.Pointer) VocabSizeResult
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -287,7 +303,7 @@ func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
 
 func FromFile(configFile string, opts ...TokenizerOption) (*Tokenizer, error) {
 	if configFile == "" {
-		return nil, errors.Errorf("config file path cannot be empty")
+		return nil, errors.New("config file path cannot be empty")
 	}
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		return nil, errors.Errorf("config file does not exist at path: %s", configFile)
@@ -326,7 +342,6 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.freeString, tokenizer.libh, "free_string")
 	purego.RegisterLibFunc(&tokenizer.decode, tokenizer.libh, "decode")
 	purego.RegisterLibFunc(&tokenizer.vocabSize, tokenizer.libh, "vocab_size")
-	purego.RegisterLibFunc(&tokenizer.getLastErrorCore, tokenizer.libh, "get_last_error_code")
 
 	tOpts := &TokenizerOptions{}
 	if tokenizer.TruncationEnabled {
@@ -346,15 +361,16 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 			Strategy: tokenizer.PaddingStrategy,
 		}
 	}
-	tokenizer.tokenizerh = tokenizer.fromBytes(config, uint32(len(config)), tOpts)
-	if tokenizer.tokenizerh == nil {
-		lastErrorCode := tokenizer.getLastErrorCore()
-		return nil, errors.Errorf("failed to initialize tokenizer: %d", lastErrorCode)
+	tRes := tokenizer.fromBytes(config, uint32(len(config)), tOpts)
+	if tRes.ErrorCode != SUCCESS {
+		lastErrorCode := tRes.ErrorCode
+		return nil, errors.Errorf("failed to create tokenizer from bytes: %d", lastErrorCode)
 	}
+	tokenizer.tokenizerh = tRes.Tokenizer
 	return tokenizer, nil
 }
 func (t *Tokenizer) Close() error {
-	if t.freeTokenizer != nil && t.tokenizerh != nil {
+	if t.tokenizerh != nil {
 		t.freeTokenizer(t.tokenizerh)
 		t.tokenizerh = nil
 	}
@@ -367,19 +383,19 @@ func (t *Tokenizer) Close() error {
 
 func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult, error) {
 	if t.encode == nil || t.tokenizerh == nil {
-		return nil, errors.Errorf("encode function is not initialized or tokenizer is not loaded")
+		return nil, errors.New("encode function is not initialized or tokenizer is not loaded")
 	}
 	options := t.defaultEncodingOpts
 	for _, opt := range opts {
 		if err := opt(&options); err != nil {
-			return nil, errors.Wrapf(err, "failed to apply encoding option")
+			return nil, errors.Wrap(err, "failed to apply encoding option")
 		}
 	}
 	var buff Buffer
 	rc := t.encode(t.tokenizerh, message, &options, &buff)
 	if rc < 0 {
-		lastErr := getLastError(t)
-		return nil, errors.Wrapf(lastErr, "failed to encode message")
+		lastError := getErrorForCode(rc)
+		return nil, errors.Wrap(lastError, "failed to encode message")
 	}
 	defer func() {
 		t.freeBuffer(&buff)
@@ -414,67 +430,68 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 
 func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error) {
 	if t.decode == nil || t.tokenizerh == nil {
-		return "", errors.Errorf("decode function is not initialized or tokenizer is not loaded")
+		return "", errors.New("decode function is not initialized or tokenizer is not loaded")
 	}
 	idsPtr := (*uint32)(unsafe.Pointer(&ids[0]))
 	idLen := uint32(len(ids))
-	resultPtr := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens)
-	if resultPtr == nil {
-		lastError := getLastError(t)
-		return "", errors.Errorf("failed to decode ids: %s", lastError)
+	decodeResult := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens)
+	if decodeResult.ErrorCode != SUCCESS {
+		lastError := getErrorForCode(decodeResult.ErrorCode)
+		return "", errors.Wrapf(lastError, "failed to decode ids")
 	}
-	defer t.freeString(resultPtr)
-	result := (*string)(unsafe.Pointer(resultPtr))
+	defer t.freeString(decodeResult.String)
+	result := (*string)(unsafe.Pointer(decodeResult.String))
 	if result == nil {
-		return "", errors.Errorf("failed to decode ids, result is nil")
+		return "", errors.New("failed to decode ids, result is nil")
 	}
 	return *result, nil
 
 }
 func (t *Tokenizer) VocabSize() (uint32, error) {
 	if t.vocabSize == nil || t.tokenizerh == nil {
-		return 0, errors.Errorf("vocabSize function is not initialized or tokenizer is not loaded")
+		return 0, errors.New("vocabSize function is not initialized or tokenizer is not loaded")
 	}
-	return t.vocabSize(t.tokenizerh), nil
+	res := t.vocabSize(t.tokenizerh)
+	if res.ErrorCode != SUCCESS {
+		lastError := getErrorForCode(res.ErrorCode)
+		return 0, errors.Wrapf(lastError, "failed to get vocab size")
+	}
+	return res.VocabSize, nil
 }
 
-func getLastError(t *Tokenizer) error {
-	if t.getLastErrorCore == nil {
-		return errors.Errorf("getLastError function is not initialized")
-	}
-	errCode := t.getLastErrorCore()
+func getErrorForCode(errCode int32) error {
 	if errCode == SUCCESS {
 		return nil // No error
 	}
 	switch errCode {
 	case ErrInvalidUTF8:
-		return errors.Errorf("invalid UTF-8 in input message")
+		return errors.New("invalid UTF-8 in input message")
 	case ErrEncodingFailed:
-		return errors.Errorf("tokenization failed")
+		return errors.New("tokenization failed")
 	case ErrNullOutput:
-		return errors.Errorf("internal error: null output buffer")
+		return errors.New("internal error: null output buffer")
 	case ErrInvalidTokenizerRef:
-		return errors.Errorf("invalid tokenizer reference")
+		return errors.New("invalid tokenizer reference")
 	case ErrNullInput:
-		return errors.Errorf("null input provided")
+		return errors.New("null input provided")
 	case ErrTokenizerCreationFailed:
-		return errors.Errorf("failed to create tokenizer instance")
+		return errors.New("failed to create tokenizer instance")
 	case ErrInvalidPath:
-		return errors.Errorf("invalid file path provided")
+		return errors.New("invalid file path provided")
 	case ErrFileNotFound:
-		return errors.Errorf("file not found at specified path")
+		return errors.New("file not found at specified path")
 	case ErrTruncationFailed:
-		return errors.Errorf("truncation failed")
+		return errors.New("truncation failed")
 	case ErrPaddingFailed:
-		return errors.Errorf("padding failed")
+		return errors.New("padding failed")
 	case ErrDecodeFailed:
-		return errors.Errorf("decoding failed")
+		return errors.New("decoding failed")
 	case ErrCStringConversionFailed:
-		return errors.Errorf("C string conversion failed")
+		return errors.New("C string conversion failed")
 	case ErrInvalidIDs:
-		return errors.Errorf("invalid IDs provided for decoding")
+		return errors.New("invalid IDs provided for decoding")
 	case ErrInvalidOptions:
-		return errors.Errorf("invalid options provided for encoding/decoding")
+		return errors.New("invalid options provided for encoding/decoding")
 	default:
 		return errors.Errorf("unknown error code: %d", errCode)
 	}

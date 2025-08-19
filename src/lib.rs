@@ -6,7 +6,7 @@ use std::ptr;
 use tokenizers::tokenizer::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy, TruncationStrategy};
 
-// Error codes
+// Error codes - expanded for better error reporting
 const SUCCESS: i32 = 0;
 const ERROR_INVALID_UTF8: i32 = -1;
 const ERROR_ENCODING_FAILED: i32 = -2;
@@ -66,37 +66,61 @@ pub struct EncodeOptions {
     return_offsets: bool,
 }
 
+// Result structures for functions that can fail
+#[repr(C)]
+pub struct TokenizerResult {
+    tokenizer: *mut Tokenizer,
+    error_code: i32,
+}
+
+#[repr(C)]
+pub struct StringResult {
+    string: *mut libc::c_char,
+    error_code: i32,
+}
+
+#[repr(C)]
+pub struct VocabSizeResult {
+    size: u32,
+    error_code: i32,
+}
+
 /// Creates a tokenizer from bytes with the given options.
-/// Returns NULL on error. Use `get_last_error_code` to get the specific error.
 ///
 /// # Safety
 ///
 /// - `bytes` must be a valid pointer to at least `len` bytes
 /// - `opts` must be a valid pointer to a `TokenizerOptions` struct
 /// - The memory pointed to by `bytes` must remain valid for the duration of this call
-/// - The returned pointer must be freed using `free_tokenizer` when no longer needed
+/// - The returned tokenizer pointer must be freed using `free_tokenizer` when no longer needed
 #[no_mangle]
 pub unsafe extern "C" fn from_bytes(
     bytes: *const u8,
     len: u32,
     opts: *const TokenizerOptions,
-) -> *mut Tokenizer {
+) -> TokenizerResult {
     if bytes.is_null() {
-        set_last_error(ERROR_NULL_INPUT);
-        return ptr::null_mut();
+        return TokenizerResult {
+            tokenizer: ptr::null_mut(),
+            error_code: ERROR_NULL_INPUT,
+        };
     }
 
     if opts.is_null() {
-        set_last_error(ERROR_INVALID_OPTIONS);
-        return ptr::null_mut();
+        return TokenizerResult {
+            tokenizer: ptr::null_mut(),
+            error_code: ERROR_INVALID_OPTIONS,
+        };
     }
 
     let bytes_slice = std::slice::from_raw_parts(bytes, len as usize);
     let mut tok = match Tokenizer::from_bytes(bytes_slice) {
         Ok(t) => t,
         Err(_) => {
-            set_last_error(ERROR_TOKENIZER_CREATION_FAILED);
-            return ptr::null_mut();
+            return TokenizerResult {
+                tokenizer: ptr::null_mut(),
+                error_code: ERROR_TOKENIZER_CREATION_FAILED,
+            };
         }
     };
 
@@ -128,8 +152,10 @@ pub unsafe extern "C" fn from_bytes(
             }))
             .is_err()
         {
-            set_last_error(ERROR_TRUNCATION_FAILED);
-            return ptr::null_mut();
+            return TokenizerResult {
+                tokenizer: ptr::null_mut(),
+                error_code: ERROR_TRUNCATION_FAILED,
+            };
         }
     }
 
@@ -140,49 +166,58 @@ pub unsafe extern "C" fn from_bytes(
         }));
     }
 
-    set_last_error(SUCCESS);
-    Box::into_raw(Box::new(tok))
+    TokenizerResult {
+        tokenizer: Box::into_raw(Box::new(tok)),
+        error_code: SUCCESS,
+    }
 }
 
 /// Creates a tokenizer from a file path.
-/// Returns NULL on error. Use `get_last_error_code` to get the specific error.
 ///
 /// # Safety
 ///
 /// - `config` must be a valid pointer to a null-terminated C string
-/// - The returned pointer must be freed using `free_tokenizer` when no longer needed
+/// - The returned tokenizer pointer must be freed using `free_tokenizer` when no longer needed
 #[no_mangle]
-pub unsafe extern "C" fn from_file(config: *const libc::c_char) -> *mut libc::c_void {
+pub unsafe extern "C" fn from_file(config: *const libc::c_char) -> TokenizerResult {
     if config.is_null() {
-        set_last_error(ERROR_NULL_INPUT);
-        return ptr::null_mut();
+        return TokenizerResult {
+            tokenizer: ptr::null_mut(),
+            error_code: ERROR_NULL_INPUT,
+        };
     }
 
     let config_cstr = CStr::from_ptr(config);
     let config_str = match config_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error(ERROR_INVALID_PATH);
-            return ptr::null_mut();
+            return TokenizerResult {
+                tokenizer: ptr::null_mut(),
+                error_code: ERROR_INVALID_PATH,
+            };
         }
     };
 
     let config_path = PathBuf::from(config_str);
 
     match Tokenizer::from_file(config_path) {
-        Ok(tokenizer) => {
-            set_last_error(SUCCESS);
-            let ptr = Box::into_raw(Box::new(tokenizer));
-            ptr.cast()
-        }
+        Ok(tokenizer) => TokenizerResult {
+            tokenizer: Box::into_raw(Box::new(tokenizer)),
+            error_code: SUCCESS,
+        },
         Err(e) => {
             // Try to determine if it's a file not found error
-            if e.to_string().contains("No such file") || e.to_string().contains("not found") {
-                set_last_error(ERROR_FILE_NOT_FOUND);
-            } else {
-                set_last_error(ERROR_TOKENIZER_CREATION_FAILED);
+            let error_code =
+                if e.to_string().contains("No such file") || e.to_string().contains("not found") {
+                    ERROR_FILE_NOT_FOUND
+                } else {
+                    ERROR_TOKENIZER_CREATION_FAILED
+                };
+
+            TokenizerResult {
+                tokenizer: ptr::null_mut(),
+                error_code,
             }
-            ptr::null_mut()
         }
     }
 }
@@ -199,7 +234,7 @@ pub unsafe extern "C" fn from_file(config: *const libc::c_char) -> *mut libc::c_
 /// - The caller is responsible for freeing the buffer using `free_buffer`
 #[no_mangle]
 pub unsafe extern "C" fn encode(
-    ptr: *mut libc::c_void,
+    ptr: *mut Tokenizer,
     message: *const libc::c_char,
     options: *const EncodeOptions,
     out: *mut Buffer,
@@ -220,7 +255,7 @@ pub unsafe extern "C" fn encode(
         return ERROR_NULL_OUTPUT;
     }
 
-    let tokenizer: &Tokenizer = match ptr.cast::<Tokenizer>().as_ref() {
+    let tokenizer: &Tokenizer = match ptr.as_ref() {
         Some(t) => t,
         None => return ERROR_INVALID_TOKENIZER_REF,
     };
@@ -321,7 +356,6 @@ pub unsafe extern "C" fn encode(
 }
 
 /// Decodes token IDs back to text.
-/// Returns NULL on error. Use `get_last_error_code` to get the specific error.
 ///
 /// # Safety
 ///
@@ -330,31 +364,39 @@ pub unsafe extern "C" fn encode(
 /// - The returned string must be freed using `free_string` when no longer needed
 #[no_mangle]
 pub unsafe extern "C" fn decode(
-    ptr: *mut libc::c_void,
+    ptr: *mut Tokenizer,
     ids: *const u32,
     len: u32,
     skip_special_tokens: bool,
-) -> *mut libc::c_char {
+) -> StringResult {
     if ptr.is_null() {
-        set_last_error(ERROR_INVALID_TOKENIZER_REF);
-        return ptr::null_mut();
+        return StringResult {
+            string: ptr::null_mut(),
+            error_code: ERROR_INVALID_TOKENIZER_REF,
+        };
     }
 
     if ids.is_null() {
-        set_last_error(ERROR_INVALID_IDS);
-        return ptr::null_mut();
+        return StringResult {
+            string: ptr::null_mut(),
+            error_code: ERROR_INVALID_IDS,
+        };
     }
 
     if len == 0 {
-        set_last_error(ERROR_INVALID_IDS);
-        return ptr::null_mut();
+        return StringResult {
+            string: ptr::null_mut(),
+            error_code: ERROR_INVALID_IDS,
+        };
     }
 
-    let tokenizer: &Tokenizer = match ptr.cast::<Tokenizer>().as_ref() {
+    let tokenizer: &Tokenizer = match ptr.as_ref() {
         Some(t) => t,
         None => {
-            set_last_error(ERROR_INVALID_TOKENIZER_REF);
-            return ptr::null_mut();
+            return StringResult {
+                string: ptr::null_mut(),
+                error_code: ERROR_INVALID_TOKENIZER_REF,
+            };
         }
     };
 
@@ -363,53 +405,65 @@ pub unsafe extern "C" fn decode(
     let string = match tokenizer.decode(ids_slice, skip_special_tokens) {
         Ok(s) => s,
         Err(_) => {
-            set_last_error(ERROR_DECODE_FAILED);
-            return ptr::null_mut();
+            return StringResult {
+                string: ptr::null_mut(),
+                error_code: ERROR_DECODE_FAILED,
+            };
         }
     };
 
     match std::ffi::CString::new(string) {
-        Ok(c_string) => {
-            set_last_error(SUCCESS);
-            c_string.into_raw()
-        }
-        Err(_) => {
-            set_last_error(ERROR_CSTRING_CONVERSION_FAILED);
-            ptr::null_mut()
-        }
+        Ok(c_string) => StringResult {
+            string: c_string.into_raw(),
+            error_code: SUCCESS,
+        },
+        Err(_) => StringResult {
+            string: ptr::null_mut(),
+            error_code: ERROR_CSTRING_CONVERSION_FAILED,
+        },
     }
 }
-
+/// # Safety
+/// /// - `ptr` must be a valid pointer to a `Tokenizer` created by `from_bytes` or `from_file`
 /// Gets the vocabulary size of the tokenizer.
-/// Returns 0 if the tokenizer is invalid.
 #[no_mangle]
-pub extern "C" fn vocab_size(ptr: *mut libc::c_void) -> u32 {
+pub unsafe extern "C" fn vocab_size(ptr: *mut Tokenizer) -> VocabSizeResult {
     if ptr.is_null() {
-        set_last_error(ERROR_INVALID_TOKENIZER_REF);
-        return 0;
+        return VocabSizeResult {
+            size: 0,
+            error_code: ERROR_INVALID_TOKENIZER_REF,
+        };
     }
 
-    let tokenizer: &Tokenizer = match unsafe { ptr.cast::<Tokenizer>().as_ref() } {
+    let tokenizer: &Tokenizer = match ptr.as_ref() {
         Some(t) => t,
         None => {
-            set_last_error(ERROR_INVALID_TOKENIZER_REF);
-            return 0;
+            return VocabSizeResult {
+                size: 0,
+                error_code: ERROR_INVALID_TOKENIZER_REF,
+            };
         }
     };
 
-    set_last_error(SUCCESS);
-    tokenizer.get_vocab_size(true) as u32
+    VocabSizeResult {
+        size: tokenizer.get_vocab_size(true) as u32,
+        error_code: SUCCESS,
+    }
 }
 
 /// Frees a tokenizer instance.
+///
+/// # Safety
+///
+/// - `ptr` must be either null or a valid pointer to a `Tokenizer` created by `from_bytes` or `from_file`
+/// - After calling this function, the tokenizer is invalid and must not be used
+/// - This function must only be called once per tokenizer
 #[no_mangle]
-pub extern "C" fn free_tokenizer(ptr: *mut libc::c_void) {
+pub unsafe extern "C" fn free_tokenizer(ptr: *mut Tokenizer) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        drop(Box::from_raw(ptr.cast::<Tokenizer>()));
-    }
+    drop(Box::from_raw(ptr));
 }
 
 /// Frees a buffer returned by encode.
@@ -473,27 +527,6 @@ pub unsafe extern "C" fn free_string(ptr: *mut libc::c_char) {
         return;
     }
     drop(std::ffi::CString::from_raw(ptr));
-}
-
-// Thread-local storage for the last error code
-std::thread_local! {
-    static LAST_ERROR: std::cell::Cell<i32> = const { std::cell::Cell::new(SUCCESS) };
-}
-
-/// Sets the last error code.
-fn set_last_error(code: i32) {
-    LAST_ERROR.with(|e| e.set(code));
-}
-
-/// Gets the last error code and resets it to SUCCESS.
-/// This allows callers to check what went wrong after a function returns NULL or an error.
-#[no_mangle]
-pub extern "C" fn get_last_error_code() -> i32 {
-    LAST_ERROR.with(|e| {
-        let code = e.get();
-        e.set(SUCCESS);
-        code
-    })
 }
 
 /// Gets a human-readable error message for the given error code.
