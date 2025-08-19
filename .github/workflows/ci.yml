@@ -71,16 +71,6 @@ jobs:
     - name: Install cargo-zigbuild
       run: cargo install cargo-zigbuild
 
-    - name: Windows path debug
-      if: matrix.os == 'windows-latest'
-      run: |
-        cargo zigbuild --release --message-format=json `
-        | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
-        | ? { $_.reason -eq "compiler-artifact" -and $_.target.kind -contains "cdylib" } `
-        | % { $_.filenames } | ? { $_ -like "*.dll" } `
-        | Get-Item | Sort-Object LastWriteTime -Descending `
-        | Select-Object -ExpandProperty FullName -First 1
-
     - name: Cache cargo registry
       uses: actions/cache@v4
       with:
@@ -91,7 +81,15 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build Rust library
-      run: cargo build --release
+      run: |
+        $dll = cargo zigbuild --release --message-format=json `
+        | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
+        | ? { $_.reason -eq "compiler-artifact" -and $_.target.kind -contains "cdylib" } `
+        | % { $_.filenames } | ? { $_ -like "*.dll" } `
+        | Get-Item | Sort-Object LastWriteTime -Descending `
+        | Select-Object -ExpandProperty FullName -First 1
+  
+        "TOKENIZERS_LIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Set library path (Unix)
       if: matrix.os != 'windows-latest'
@@ -102,10 +100,10 @@ jobs:
           echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
         fi
 
-    - name: Set library path (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        echo "TOKENIZERS_LIB_PATH=$(pwd)\target\release\libtokenizers.dll" >> $env:GITHUB_ENV
+#    - name: Set library path (Windows)
+#      if: matrix.os == 'windows-latest'
+#      run: |
+#        echo "TOKENIZERS_LIB_PATH=$(pwd)\target\release\libtokenizers.dll" >> $env:GITHUB_ENV
 
     - name: Run Go tests
       run: |
