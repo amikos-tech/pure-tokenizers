@@ -81,6 +81,11 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build Rust library
+      if: matrix.os != 'windows-latest'
+      run: cargo zigbuild --release
+
+    - name: Build Rust library (Windows)
+      if: matrix.os == 'windows-latest'
       run: |
         $dll = cargo zigbuild --release --message-format=json `
         | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
@@ -88,8 +93,9 @@ jobs:
         | % { $_.filenames } | ? { $_ -like "*.dll" } `
         | Get-Item | Sort-Object LastWriteTime -Descending `
         | Select-Object -ExpandProperty FullName -First 1
-  
+        
         "TOKENIZERS_LIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
 
     - name: Set library path (Unix)
       if: matrix.os != 'windows-latest'
