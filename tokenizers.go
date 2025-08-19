@@ -246,19 +246,23 @@ type Tokenizer struct {
 
 const LibName = "tokenizers"
 
-// used in future PR
-//func isMusl() bool {
-//	matches, err := filepath.Glob("/lib/ld-musl-*.so*")
-//	return err == nil && len(matches) > 0
-//}
+func isMusl() bool {
+	matches, err := filepath.Glob("/lib/ld-musl-*.so*")
+	return err == nil && len(matches) > 0
+}
 
 func getLibraryName() string {
 	switch runtime.GOOS {
 	case "windows":
-		return fmt.Sprintf("lib%s.dll", LibName)
+		return fmt.Sprintf("%s.dll", LibName)
 	case "darwin":
 		return fmt.Sprintf("lib%s.dylib", LibName)
-	default: // linux and others
+	default: // gnu/linux, freebsd, etc.
+		// For musl libc, we use .a (static library) instead of .so (shared library)
+		// This is a workaround for musl-based systems where shared libraries
+		if isMusl() {
+			return fmt.Sprintf("lib%s.a", LibName)
+		}
 		return fmt.Sprintf("lib%s.so", LibName)
 	}
 }

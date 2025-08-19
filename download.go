@@ -39,7 +39,11 @@ func getPlatformAssetName() string {
 	case "darwin":
 		platform = "apple-darwin"
 	case "linux":
-		platform = "unknown-linux-gnu"
+		if isMusl() {
+			platform = "unknown-linux-musl"
+		} else {
+			platform = "unknown-linux-gnu"
+		}
 	case "windows":
 		platform = "pc-windows-msvc"
 	default:
@@ -88,14 +92,10 @@ func downloadFile(url, dest string) error {
 }
 
 // verifyChecksum verifies the SHA256 checksum of the downloaded file
-func verifyChecksum(filePath, checksumPath string) error {
+func verifyChecksum(filePath, checksumData string) error {
 	// Read the expected checksum
-	checksumData, err := os.ReadFile(checksumPath)
-	if err != nil {
-		return fmt.Errorf("failed to read checksum file: %w", err)
-	}
 
-	expectedChecksum := strings.TrimSpace(string(checksumData))
+	expectedChecksum := strings.TrimSpace(checksumData)
 	// Handle format like "abc123  filename.tar.gz"
 	if parts := strings.Fields(expectedChecksum); len(parts) >= 1 {
 		expectedChecksum = parts[0]
@@ -190,6 +190,7 @@ type GitHubRelease struct {
 type GitHubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest,omitempty"` // Optional field for checksums
 }
 
 // fetchLatestRelease fetches the latest release information from GitHub API
@@ -260,24 +261,18 @@ func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
 // downloadAndExtractLibrary handles the common download and extraction logic
 func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	assetName := getPlatformAssetName()
-	checksumName := assetName + ".sha256"
-
 	// Find the asset URLs
-	var assetURL, checksumURL string
+	var assetURL, assetChecksum string
 	for _, asset := range release.Assets {
 		switch asset.Name {
 		case assetName:
 			assetURL = asset.BrowserDownloadURL
-		case checksumName:
-			checksumURL = asset.BrowserDownloadURL
+			assetChecksum = asset.Digest // Optional checksum field
 		}
 	}
 
 	if assetURL == "" {
 		return fmt.Errorf("asset %s not found in release %s", assetName, release.TagName)
-	}
-	if checksumURL == "" {
-		return fmt.Errorf("checksum file %s not found in release %s", checksumName, release.TagName)
 	}
 
 	// Create temporary files for download
@@ -290,20 +285,18 @@ func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	}()
 
 	tempAsset := filepath.Join(tempDir, assetName)
-	tempChecksum := filepath.Join(tempDir, checksumName)
 
 	// Download both files
 	if err := downloadFile(assetURL, tempAsset); err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}
 
-	if err := downloadFile(checksumURL, tempChecksum); err != nil {
-		return fmt.Errorf("failed to download checksum: %w", err)
-	}
-
 	// Verify checksum
-	if err := verifyChecksum(tempAsset, tempChecksum); err != nil {
-		return fmt.Errorf("checksum verification failed: %w", err)
+	if assetChecksum != "" {
+		tempChecksum := strings.SplitAfter(assetChecksum, "sha256:")[1]
+		if err := verifyChecksum(tempAsset, tempChecksum); err != nil {
+			return fmt.Errorf("checksum verification failed: %w", err)
+		}
 	}
 
 	// Extract the library from the tar.gz file
