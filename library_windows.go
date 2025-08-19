@@ -3,18 +3,17 @@
 package tokenizers
 
 import (
-	"fmt"
-	"golang.org/x/sys/windows"
 	"os"
+
+	"github.com/pkg/errors"
+
+	"golang.org/x/sys/windows"
 )
 
 func loadLibrary(path string) (uintptr, error) {
 	handle, err := windows.LoadLibrary(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to load shared library: %w", err)
-	}
-	if handle == 0 {
-		return 0, fmt.Errorf("shared library handle is nil after loading: %s", path)
+	if err != nil || handle == 0 {
+		return 0, errors.Wrapf(err, "failed to load shared library: %s", path)
 	}
 	return uintptr(handle), nil
 }
@@ -34,7 +33,7 @@ func isLibraryValid(path string) bool {
 
 func closeLibrary(handle uintptr) error {
 	if err := windows.FreeLibrary(windows.Handle(handle)); err != nil {
-		return fmt.Errorf("failed to close library: %w", err)
+		return errors.Errorf("failed to close library: %s", err.Error())
 	}
 	return nil
 }

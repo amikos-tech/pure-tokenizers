@@ -3,21 +3,19 @@
 package tokenizers
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/pkg/errors"
 
 	"github.com/ebitengine/purego"
 )
 
 func loadLibrary(path string) (uintptr, error) {
-	libh, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return 0, fmt.Errorf("failed to load shared library: %w", err)
+	libHandle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil || libHandle == 0 {
+		return 0, errors.Wrapf(err, "failed to load shared library: %s", path)
 	}
-	if libh == 0 {
-		return 0, fmt.Errorf("shared library handle is nil after loading: %s", path)
-	}
-	return libh, nil
+	return libHandle, nil
 }
 
 // isLibraryValid checks if the library file exists and is valid
@@ -36,7 +34,7 @@ func isLibraryValid(path string) bool {
 
 func closeLibrary(handle uintptr) error {
 	if err := purego.Dlclose(handle); err != nil {
-		return fmt.Errorf("failed to close library: %w", err)
+		return errors.Errorf("failed to close library: %s", err.Error())
 	}
 	return nil
 }
