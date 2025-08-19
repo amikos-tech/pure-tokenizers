@@ -39,6 +39,22 @@ func checkLibraryExists(t *testing.T) string {
 	return libPath
 }
 
+func TestDownloadLibraryFromGitHub(t *testing.T) {
+	versions, err := GetAvailableVersions()
+	require.NoError(t, err, "Failed to get available versions")
+	if len(versions) == 0 {
+		t.Skip("No versions available to download")
+	}
+	testPath := filepath.Join(os.TempDir(), "tokenizers.dylib")
+	err = DownloadLibraryFromGitHub(testPath)
+	require.NoError(t, err, "Failed to download library from GitHub")
+	require.FileExists(t, testPath)
+	t.Cleanup(func() {
+		err := os.Remove(testPath)
+		require.NoError(t, err, "Failed to remove downloaded library")
+	})
+}
+
 func TestGetPlatformAssetName(t *testing.T) {
 	assetName := getPlatformAssetName()
 	t.Logf("Platform asset name: %s", assetName)

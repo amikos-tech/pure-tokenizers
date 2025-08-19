@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   rust-test:
     name: Rust Tests
@@ -183,6 +186,8 @@ jobs:
       run: |
         go mod tidy
         make test-ci
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
 
     
 

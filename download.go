@@ -39,7 +39,11 @@ func getPlatformAssetName() string {
 	case "darwin":
 		platform = "apple-darwin"
 	case "linux":
-		platform = "unknown-linux-gnu"
+		if isMusl() {
+			platform = "unknown-linux-musl"
+		} else {
+			platform = "unknown-linux-gnu"
+		}
 	case "windows":
 		platform = "pc-windows-msvc"
 	default:
@@ -58,8 +62,22 @@ func DownloadLibraryFromGitHub(destPath string) error {
 // downloadFile downloads a file from the given URL to the destination path
 func downloadFile(url, dest string) error {
 	client := &http.Client{Timeout: DownloadTimeout}
+	req, _ := http.NewRequest("GET",
+		url, nil)
 
-	resp, err := client.Get(url)
+	// Headers required/recommended by GitHub
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVer)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download from %s: %w", url, err)
 	}
@@ -88,14 +106,10 @@ func downloadFile(url, dest string) error {
 }
 
 // verifyChecksum verifies the SHA256 checksum of the downloaded file
-func verifyChecksum(filePath, checksumPath string) error {
+func verifyChecksum(filePath, checksumData string) error {
 	// Read the expected checksum
-	checksumData, err := os.ReadFile(checksumPath)
-	if err != nil {
-		return fmt.Errorf("failed to read checksum file: %w", err)
-	}
 
-	expectedChecksum := strings.TrimSpace(string(checksumData))
+	expectedChecksum := strings.TrimSpace(checksumData)
 	// Handle format like "abc123  filename.tar.gz"
 	if parts := strings.Fields(expectedChecksum); len(parts) >= 1 {
 		expectedChecksum = parts[0]
@@ -190,13 +204,29 @@ type GitHubRelease struct {
 type GitHubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest,omitempty"` // Optional field for checksums
 }
 
 // fetchLatestRelease fetches the latest release information from GitHub API
 func fetchLatestRelease(url string) (*GitHubRelease, error) {
 	client := &http.Client{Timeout: DownloadTimeout}
 
-	resp, err := client.Get(url)
+	req, _ := http.NewRequest("GET",
+		url, nil)
+
+	// Headers required/recommended by GitHub
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVer)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release info: %w", err)
 	}
@@ -205,7 +235,7 @@ func fetchLatestRelease(url string) (*GitHubRelease, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API request failed with status %d: %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("GitHub API request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
 	}
 
 	var release GitHubRelease
@@ -260,24 +290,18 @@ func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
 // downloadAndExtractLibrary handles the common download and extraction logic
 func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	assetName := getPlatformAssetName()
-	checksumName := assetName + ".sha256"
-
 	// Find the asset URLs
-	var assetURL, checksumURL string
+	var assetURL, assetChecksum string
 	for _, asset := range release.Assets {
 		switch asset.Name {
 		case assetName:
 			assetURL = asset.BrowserDownloadURL
-		case checksumName:
-			checksumURL = asset.BrowserDownloadURL
+			assetChecksum = asset.Digest // Optional checksum field
 		}
 	}
 
 	if assetURL == "" {
 		return fmt.Errorf("asset %s not found in release %s", assetName, release.TagName)
-	}
-	if checksumURL == "" {
-		return fmt.Errorf("checksum file %s not found in release %s", checksumName, release.TagName)
 	}
 
 	// Create temporary files for download
@@ -290,20 +314,18 @@ func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	}()
 
 	tempAsset := filepath.Join(tempDir, assetName)
-	tempChecksum := filepath.Join(tempDir, checksumName)
 
 	// Download both files
 	if err := downloadFile(assetURL, tempAsset); err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}
 
-	if err := downloadFile(checksumURL, tempChecksum); err != nil {
-		return fmt.Errorf("failed to download checksum: %w", err)
-	}
-
 	// Verify checksum
-	if err := verifyChecksum(tempAsset, tempChecksum); err != nil {
-		return fmt.Errorf("checksum verification failed: %w", err)
+	if assetChecksum != "" {
+		tempChecksum := strings.SplitAfter(assetChecksum, "sha256:")[1]
+		if err := verifyChecksum(tempAsset, tempChecksum); err != nil {
+			return fmt.Errorf("checksum verification failed: %w", err)
+		}
 	}
 
 	// Extract the library from the tar.gz file
@@ -341,6 +363,8 @@ func GetCachedLibraryPath() string {
 	return filepath.Join(cacheDir, getLibraryName())
 }
 
+const apiVer = "2022-11-28"
+
 // ClearLibraryCache removes the cached library file
 func ClearLibraryCache() error {
 	cachedPath := GetCachedLibraryPath()
@@ -356,7 +380,22 @@ func GetAvailableVersions() ([]string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
 
 	client := &http.Client{Timeout: DownloadTimeout}
-	resp, err := client.Get(url)
+	req, _ := http.NewRequest("GET",
+		url, nil)
+
+	// Headers required/recommended by GitHub
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVer)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch releases: %w", err)
 	}
@@ -365,7 +404,7 @@ func GetAvailableVersions() ([]string, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API request failed with status %d: %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("GitHub API request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
 	}
 
 	var releases []GitHubRelease
