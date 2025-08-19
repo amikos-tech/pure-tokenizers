@@ -226,14 +226,14 @@ type Tokenizer struct {
 	LibraryPath         string // Path to the shared library
 	libh                uintptr
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
-	fromFile            func(config string) TokenizerResult
-	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) TokenizerResult
+	fromFile            func(config string, result *TokenizerResult) int32
+	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions, result *TokenizerResult) int32
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr *string)
-	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) StringResult
-	vocabSize           func(ptr unsafe.Pointer) VocabSizeResult
+	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
+	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -361,12 +361,13 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 			Strategy: tokenizer.PaddingStrategy,
 		}
 	}
-	tRes := tokenizer.fromBytes(config, uint32(len(config)), tOpts)
-	if tRes.ErrorCode != SUCCESS {
-		lastErrorCode := tRes.ErrorCode
-		return nil, errors.Errorf("failed to create tokenizer from bytes: %d", lastErrorCode)
+	var result TokenizerResult
+	errCode := tokenizer.fromBytes(config, uint32(len(config)), tOpts, &result)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
+		return nil, errors.Wrapf(lastError, "failed to create tokenizer from bytes")
 	}
-	tokenizer.tokenizerh = tRes.Tokenizer
+	tokenizer.tokenizerh = result.Tokenizer
 	return tokenizer, nil
 }
 func (t *Tokenizer) Close() error {
@@ -434,13 +435,14 @@ func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error)
 	}
 	idsPtr := (*uint32)(unsafe.Pointer(&ids[0]))
 	idLen := uint32(len(ids))
-	decodeResult := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens)
-	if decodeResult.ErrorCode != SUCCESS {
-		lastError := getErrorForCode(decodeResult.ErrorCode)
+	var strResult string
+	errCode := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens, &strResult)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
 		return "", errors.Wrapf(lastError, "failed to decode ids")
 	}
-	defer t.freeString(decodeResult.String)
-	result := (*string)(unsafe.Pointer(decodeResult.String))
+	defer t.freeString(&strResult)
+	result := (*string)(unsafe.Pointer(&strResult))
 	if result == nil {
 		return "", errors.New("failed to decode ids, result is nil")
 	}
@@ -451,12 +453,13 @@ func (t *Tokenizer) VocabSize() (uint32, error) {
 	if t.vocabSize == nil || t.tokenizerh == nil {
 		return 0, errors.New("vocabSize function is not initialized or tokenizer is not loaded")
 	}
-	res := t.vocabSize(t.tokenizerh)
-	if res.ErrorCode != SUCCESS {
-		lastError := getErrorForCode(res.ErrorCode)
+	var size uint32
+	errCode := t.vocabSize(t.tokenizerh, &size)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
 		return 0, errors.Wrapf(lastError, "failed to get vocab size")
 	}
-	return res.VocabSize, nil
+	return size, nil
 }
 
 func getErrorForCode(errCode int32) error {

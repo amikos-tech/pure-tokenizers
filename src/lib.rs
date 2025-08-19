@@ -70,19 +70,16 @@ pub struct EncodeOptions {
 #[repr(C)]
 pub struct TokenizerResult {
     tokenizer: *mut Tokenizer,
-    error_code: i32,
 }
 
 #[repr(C)]
 pub struct StringResult {
     string: *mut libc::c_char,
-    error_code: i32,
 }
 
 #[repr(C)]
 pub struct VocabSizeResult {
     size: u32,
-    error_code: i32,
 }
 
 /// Creates a tokenizer from bytes with the given options.
@@ -98,29 +95,21 @@ pub unsafe extern "C" fn from_bytes(
     bytes: *const u8,
     len: u32,
     opts: *const TokenizerOptions,
-) -> TokenizerResult {
+    out: &mut TokenizerResult,
+) -> i32 {
     if bytes.is_null() {
-        return TokenizerResult {
-            tokenizer: ptr::null_mut(),
-            error_code: ERROR_NULL_INPUT,
-        };
+        return ERROR_NULL_OUTPUT;
     }
 
     if opts.is_null() {
-        return TokenizerResult {
-            tokenizer: ptr::null_mut(),
-            error_code: ERROR_INVALID_OPTIONS,
-        };
+        return ERROR_INVALID_OPTIONS;
     }
 
     let bytes_slice = std::slice::from_raw_parts(bytes, len as usize);
     let mut tok = match Tokenizer::from_bytes(bytes_slice) {
         Ok(t) => t,
         Err(_) => {
-            return TokenizerResult {
-                tokenizer: ptr::null_mut(),
-                error_code: ERROR_TOKENIZER_CREATION_FAILED,
-            };
+            return ERROR_TOKENIZER_CREATION_FAILED;
         }
     };
 
@@ -152,10 +141,7 @@ pub unsafe extern "C" fn from_bytes(
             }))
             .is_err()
         {
-            return TokenizerResult {
-                tokenizer: ptr::null_mut(),
-                error_code: ERROR_TRUNCATION_FAILED,
-            };
+            return ERROR_TRUNCATION_FAILED;
         }
     }
 
@@ -166,10 +152,9 @@ pub unsafe extern "C" fn from_bytes(
         }));
     }
 
-    TokenizerResult {
-        tokenizer: Box::into_raw(Box::new(tok)),
-        error_code: SUCCESS,
-    }
+    let raw = Box::into_raw(Box::new(tok));
+    out.tokenizer = raw;
+    SUCCESS
 }
 
 /// Creates a tokenizer from a file path.
@@ -179,44 +164,33 @@ pub unsafe extern "C" fn from_bytes(
 /// - `config` must be a valid pointer to a null-terminated C string
 /// - The returned tokenizer pointer must be freed using `free_tokenizer` when no longer needed
 #[no_mangle]
-pub unsafe extern "C" fn from_file(config: *const libc::c_char) -> TokenizerResult {
+pub unsafe extern "C" fn from_file(config: *const libc::c_char, out: &mut TokenizerResult) -> i32 {
     if config.is_null() {
-        return TokenizerResult {
-            tokenizer: ptr::null_mut(),
-            error_code: ERROR_NULL_INPUT,
-        };
+        return ERROR_NULL_INPUT;
     }
 
     let config_cstr = CStr::from_ptr(config);
     let config_str = match config_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            return TokenizerResult {
-                tokenizer: ptr::null_mut(),
-                error_code: ERROR_INVALID_PATH,
-            };
+            return ERROR_INVALID_PATH;
         }
     };
 
     let config_path = PathBuf::from(config_str);
 
     match Tokenizer::from_file(config_path) {
-        Ok(tokenizer) => TokenizerResult {
-            tokenizer: Box::into_raw(Box::new(tokenizer)),
-            error_code: SUCCESS,
-        },
+        Ok(tok) => {
+            let raw = Box::into_raw(Box::new(tok));
+            out.tokenizer = raw;
+            SUCCESS
+        }
         Err(e) => {
             // Try to determine if it's a file not found error
-            let error_code =
-                if e.to_string().contains("No such file") || e.to_string().contains("not found") {
-                    ERROR_FILE_NOT_FOUND
-                } else {
-                    ERROR_TOKENIZER_CREATION_FAILED
-                };
-
-            TokenizerResult {
-                tokenizer: ptr::null_mut(),
-                error_code,
+            if e.to_string().contains("No such file") || e.to_string().contains("not found") {
+                ERROR_FILE_NOT_FOUND
+            } else {
+                ERROR_TOKENIZER_CREATION_FAILED
             }
         }
     }
@@ -368,87 +342,58 @@ pub unsafe extern "C" fn decode(
     ids: *const u32,
     len: u32,
     skip_special_tokens: bool,
-) -> StringResult {
+    out: *mut *mut libc::c_char, // <— pointer-to-pointer
+) -> i32 {
     if ptr.is_null() {
-        return StringResult {
-            string: ptr::null_mut(),
-            error_code: ERROR_INVALID_TOKENIZER_REF,
-        };
+        return ERROR_INVALID_TOKENIZER_REF;
     }
-
-    if ids.is_null() {
-        return StringResult {
-            string: ptr::null_mut(),
-            error_code: ERROR_INVALID_IDS,
-        };
+    if ids.is_null() || len == 0 {
+        return ERROR_INVALID_IDS;
     }
-
-    if len == 0 {
-        return StringResult {
-            string: ptr::null_mut(),
-            error_code: ERROR_INVALID_IDS,
-        };
+    if out.is_null() {
+        return ERROR_NULL_OUTPUT;
     }
 
     let tokenizer: &Tokenizer = match ptr.as_ref() {
         Some(t) => t,
-        None => {
-            return StringResult {
-                string: ptr::null_mut(),
-                error_code: ERROR_INVALID_TOKENIZER_REF,
-            };
-        }
+        None => return ERROR_INVALID_TOKENIZER_REF,
     };
 
     let ids_slice = std::slice::from_raw_parts(ids, len as usize);
-
     let string = match tokenizer.decode(ids_slice, skip_special_tokens) {
         Ok(s) => s,
-        Err(_) => {
-            return StringResult {
-                string: ptr::null_mut(),
-                error_code: ERROR_DECODE_FAILED,
-            };
-        }
+        Err(_) => return ERROR_DECODE_FAILED,
     };
 
-    match std::ffi::CString::new(string) {
-        Ok(c_string) => StringResult {
-            string: c_string.into_raw(),
-            error_code: SUCCESS,
-        },
-        Err(_) => StringResult {
-            string: ptr::null_mut(),
-            error_code: ERROR_CSTRING_CONVERSION_FAILED,
-        },
-    }
+    // CString::new fails if `string` contains interior NULs.
+    let c_string = match std::ffi::CString::new(string) {
+        Ok(s) => s,
+        Err(_) => return ERROR_CSTRING_CONVERSION_FAILED,
+    };
+
+    // Transfer ownership to caller; they must free with `decode_free`.
+    let raw = c_string.into_raw();
+    ptr::write(out, raw);
+    SUCCESS
 }
 /// # Safety
 /// /// - `ptr` must be a valid pointer to a `Tokenizer` created by `from_bytes` or `from_file`
 /// Gets the vocabulary size of the tokenizer.
 #[no_mangle]
-pub unsafe extern "C" fn vocab_size(ptr: *mut Tokenizer) -> VocabSizeResult {
+pub unsafe extern "C" fn vocab_size(ptr: *mut Tokenizer, out: *mut i32) -> i32 {
     if ptr.is_null() {
-        return VocabSizeResult {
-            size: 0,
-            error_code: ERROR_INVALID_TOKENIZER_REF,
-        };
+        return ERROR_INVALID_TOKENIZER_REF;
     }
 
     let tokenizer: &Tokenizer = match ptr.as_ref() {
         Some(t) => t,
         None => {
-            return VocabSizeResult {
-                size: 0,
-                error_code: ERROR_INVALID_TOKENIZER_REF,
-            };
+            return ERROR_INVALID_TOKENIZER_REF;
         }
     };
-
-    VocabSizeResult {
-        size: tokenizer.get_vocab_size(true) as u32,
-        error_code: SUCCESS,
-    }
+    let size = tokenizer.get_vocab_size(true) as i32;
+    ptr::write(out, size);
+    SUCCESS
 }
 
 /// Frees a tokenizer instance.
