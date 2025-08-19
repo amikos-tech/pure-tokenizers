@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -70,6 +70,16 @@ jobs:
 
     - name: Install cargo-zigbuild
       run: cargo install cargo-zigbuild
+
+    - name: Windows path debug
+      if: matrix.os == 'windows-latest'
+      run: |
+        cargo zigbuild --release --message-format=json `
+        | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
+        | ? { $_.reason -eq "compiler-artifact" -and $_.target.kind -contains "cdylib" } `
+        | % { $_.filenames } | ? { $_ -like "*.dll" } `
+        | Get-Item | Sort-Object LastWriteTime -Descending `
+        | Select-Object -ExpandProperty FullName -First 1
 
     - name: Cache cargo registry
       uses: actions/cache@v4
