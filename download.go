@@ -334,6 +334,8 @@ func GetCachedLibraryPath() string {
 	return filepath.Join(cacheDir, getLibraryName())
 }
 
+const apiVer = "2022-11-28"
+
 // ClearLibraryCache removes the cached library file
 func ClearLibraryCache() error {
 	cachedPath := GetCachedLibraryPath()
@@ -349,7 +351,22 @@ func GetAvailableVersions() ([]string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
 
 	client := &http.Client{Timeout: DownloadTimeout}
-	resp, err := client.Get(url)
+	req, _ := http.NewRequest("GET",
+		url, nil)
+
+	// Headers required/recommended by GitHub
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVer)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch releases: %w", err)
 	}
