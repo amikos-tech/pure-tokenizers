@@ -8,7 +8,43 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/pkg/errors"
 )
+
+const (
+	SUCCESS                    = 0
+	ErrInvalidUTF8             = -1
+	ErrEncodingFailed          = -2
+	ErrNullOutput              = -3
+	ErrInvalidTokenizerRef     = -4
+	ErrNullInput               = -5
+	ErrTokenizerCreationFailed = -6
+	ErrInvalidPath             = -7
+	ErrFileNotFound            = -8
+	ErrTruncationFailed        = -9
+	ErrPaddingFailed           = -10
+	ErrDecodeFailed            = -11
+	ErrCStringConversionFailed = -12
+	ErrInvalidIDs              = -13
+	ErrInvalidOptions          = -14
+)
+
+// result structs
+
+type TokenizerResult struct {
+	Tokenizer unsafe.Pointer
+	ErrorCode int32
+}
+
+type StringResult struct {
+	String    *string
+	ErrorCode int32
+}
+
+type VocabSizeResult struct {
+	VocabSize uint32
+	ErrorCode int32
+}
 
 type TruncationDirection uint8
 
@@ -146,10 +182,10 @@ type TokenizerOption func(t *Tokenizer) error
 func WithLibraryPath(path string) TokenizerOption {
 	return func(t *Tokenizer) error {
 		if path == "" {
-			return fmt.Errorf("library path cannot be empty")
+			return errors.New("library path cannot be empty")
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("shared library does not exist at path: %s", path)
+			return errors.Errorf("shared library does not exist at path: %s", path)
 		}
 		t.LibraryPath = path
 		return nil
@@ -159,7 +195,7 @@ func WithLibraryPath(path string) TokenizerOption {
 func WithTruncation(maxLen uintptr, direction TruncationDirection, strategy TruncationStrategy) TokenizerOption {
 	return func(t *Tokenizer) error {
 		if maxLen == 0 {
-			return fmt.Errorf("truncation max length must be greater than 0")
+			return errors.New("truncation max length must be greater than 0")
 		}
 		t.TruncationEnabled = true
 		t.TruncationMaxLength = maxLen
@@ -190,14 +226,14 @@ type Tokenizer struct {
 	LibraryPath         string // Path to the shared library
 	libh                uintptr
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
-	fromFile            func(config string) unsafe.Pointer
-	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
+	fromFile            func(config string, result *TokenizerResult) int32
+	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions, result *TokenizerResult) int32
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr *string)
-	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) *string
-	vocabSize           func(ptr unsafe.Pointer) uint32
+	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
+	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -209,6 +245,12 @@ type Tokenizer struct {
 }
 
 const LibName = "tokenizers"
+
+// used in future PR
+//func isMusl() bool {
+//	matches, err := filepath.Glob("/lib/ld-musl-*.so*")
+//	return err == nil && len(matches) > 0
+//}
 
 func getLibraryName() string {
 	switch runtime.GOOS {
@@ -225,12 +267,12 @@ func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
 	// 1. Check explicit user path
 	if userProvidedPath != "" {
 		if _, err := os.Stat(userProvidedPath); os.IsNotExist(err) {
-			return 0, fmt.Errorf("shared library does not exist at user-provided path: %s", userProvidedPath)
+			return 0, errors.Errorf("shared library does not exist at user-provided path: %s", userProvidedPath)
 		}
 		if lib, err := loadLibrary(userProvidedPath); err == nil {
 			return lib, nil
 		} else {
-			return 0, fmt.Errorf("failed to load library from user-provided path: %w", err)
+			return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userProvidedPath)
 		}
 	}
 
@@ -253,7 +295,7 @@ func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
 
 	// 4. Download to cache and load
 	if err := downloadLibrary(cachedPath); err != nil {
-		return 0, fmt.Errorf("failed to download library: %w", err)
+		return 0, errors.Wrap(err, "failed to download library")
 	}
 
 	return loadLibrary(cachedPath)
@@ -261,14 +303,16 @@ func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
 
 func FromFile(configFile string, opts ...TokenizerOption) (*Tokenizer, error) {
 	if configFile == "" {
-		return nil, fmt.Errorf("config file path cannot be empty")
+		return nil, errors.New("config file path cannot be empty")
 	}
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file does not exist at path: %s", configFile)
+		return nil, errors.Errorf("config file does not exist at path: %s", configFile)
+	} else if err != nil {
+		return nil, errors.Wrapf(err, "failed to access config file: %s", configFile)
 	}
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, errors.Wrapf(err, "failed to read config file: %s", configFile)
 	}
 	return FromBytes(data, opts...)
 }
@@ -282,12 +326,12 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	}
 	for _, opt := range opts {
 		if err := opt(tokenizer); err != nil {
-			return nil, fmt.Errorf("failed to apply tokenizer option: %w", err)
+			return nil, errors.Wrapf(err, "failed to apply tokenizer option")
 		}
 	}
 	libh, err := LoadTokenizerLibrary(tokenizer.LibraryPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load shared library: %w", err)
+		return nil, errors.Wrapf(err, "failed to load shared library")
 	}
 	tokenizer.libh = libh
 	purego.RegisterLibFunc(&tokenizer.fromFile, tokenizer.libh, "from_file")
@@ -317,48 +361,42 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 			Strategy: tokenizer.PaddingStrategy,
 		}
 	}
-	tokenizer.tokenizerh = tokenizer.fromBytes(config, uint32(len(config)), tOpts)
-
-	if tokenizer.tokenizerh == nil {
-		return nil, fmt.Errorf("failed to initialize tokenizer")
+	var result TokenizerResult
+	errCode := tokenizer.fromBytes(config, uint32(len(config)), tOpts, &result)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
+		return nil, errors.Wrapf(lastError, "failed to create tokenizer from bytes")
 	}
+	tokenizer.tokenizerh = result.Tokenizer
 	return tokenizer, nil
 }
 func (t *Tokenizer) Close() error {
-	if t.freeTokenizer != nil && t.tokenizerh != nil {
+	if t.tokenizerh != nil {
 		t.freeTokenizer(t.tokenizerh)
 		t.tokenizerh = nil
 	}
 	err := closeLibrary(t.libh)
 	if err != nil {
-		return fmt.Errorf("failed to close shared library: %w", err)
+		return errors.Errorf("failed to close shared library: %s", err.Error())
 	}
 	return nil
 }
 
 func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult, error) {
 	if t.encode == nil || t.tokenizerh == nil {
-		return nil, fmt.Errorf("encode function is not initialized or tokenizer is not loaded")
+		return nil, errors.New("encode function is not initialized or tokenizer is not loaded")
 	}
 	options := t.defaultEncodingOpts
 	for _, opt := range opts {
 		if err := opt(&options); err != nil {
-			return nil, fmt.Errorf("failed to apply encoding option: %w", err)
+			return nil, errors.Wrap(err, "failed to apply encoding option")
 		}
 	}
 	var buff Buffer
 	rc := t.encode(t.tokenizerh, message, &options, &buff)
 	if rc < 0 {
-		switch rc {
-		case -1:
-			return nil, fmt.Errorf("invalid UTF-8 in input message")
-		case -2:
-			return nil, fmt.Errorf("tokenization failed")
-		case -3:
-			return nil, fmt.Errorf("internal error: null output buffer")
-		default:
-			return nil, fmt.Errorf("unknown error code: %d", rc)
-		}
+		lastError := getErrorForCode(rc)
+		return nil, errors.Wrap(lastError, "failed to encode message")
 	}
 	defer func() {
 		t.freeBuffer(&buff)
@@ -393,70 +431,71 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 
 func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error) {
 	if t.decode == nil || t.tokenizerh == nil {
-		return "", fmt.Errorf("decode function is not initialized or tokenizer is not loaded")
+		return "", errors.New("decode function is not initialized or tokenizer is not loaded")
 	}
 	idsPtr := (*uint32)(unsafe.Pointer(&ids[0]))
 	idLen := uint32(len(ids))
-	resultPtr := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens)
-	if resultPtr == nil {
-		return "", fmt.Errorf("failed to decode ids, result pointer is nil")
+	var strResult string
+	errCode := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens, &strResult)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
+		return "", errors.Wrapf(lastError, "failed to decode ids")
 	}
-	defer t.freeString(resultPtr)
-	result := (*string)(unsafe.Pointer(resultPtr))
+	defer t.freeString(&strResult)
+	result := (*string)(unsafe.Pointer(&strResult))
 	if result == nil {
-		return "", fmt.Errorf("failed to decode ids, result is nil")
+		return "", errors.New("failed to decode ids, result is nil")
 	}
 	return *result, nil
 
 }
 func (t *Tokenizer) VocabSize() (uint32, error) {
 	if t.vocabSize == nil || t.tokenizerh == nil {
-		return 0, fmt.Errorf("vocabSize function is not initialized or tokenizer is not loaded")
+		return 0, errors.New("vocabSize function is not initialized or tokenizer is not loaded")
 	}
-	return t.vocabSize(t.tokenizerh), nil
+	var size uint32
+	errCode := t.vocabSize(t.tokenizerh, &size)
+	if errCode != SUCCESS {
+		lastError := getErrorForCode(errCode)
+		return 0, errors.Wrapf(lastError, "failed to get vocab size")
+	}
+	return size, nil
 }
 
-//
-//func Init() {
-//	arcjetlib, err := purego.Dlopen("target/debug/libtokenizers.dylib", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-//
-//	if err != nil {
-//		// Handle error
-//		fmt.Println("Error loading library:", err)
-//	}
-//	defer purego.Dlclose(arcjetlib)
-//
-//	var fromFile func(config string) unsafe.Pointer
-//	var encode func(ptr unsafe.Pointer, message string, options *EncodeOptions) Buffer
-//	var freeBuffer func(buffer Buffer)
-//	purego.RegisterLibFunc(&fromFile, arcjetlib, "from_file")
-//	purego.RegisterLibFunc(&encode, arcjetlib, "encode")
-//	purego.RegisterLibFunc(&freeBuffer, arcjetlib, "free_buffer")
-//	//cURLPtr1, cleanup1 := CString("./tokenizer.json") // Convert Go string to C ptr
-//	//defer cleanup1()
-//	libh := fromFile("./tokenizer.json")
-//	fmt.Println(libh)
-//	opts := EncodeOptions{
-//		AddSpecialTokens:        true,
-//		ReturnTypeIDs:           true,
-//		ReturnTokens:            true,
-//		ReturnSpecialTokensMask: true,
-//		ReturnAttentionMask:     true,
-//		ReturnOffsets:           true,
-//	}
-//	buff := encode(libh, "Hello world", &opts)
-//	fmt.Println(buff)
-//
-//	idsSlice := unsafe.Slice((*int32)(unsafe.Pointer(buff.IDs)), buff.Len)
-//	fmt.Println(idsSlice)
-//	typeIDsSlice := unsafe.Slice((*int32)(unsafe.Pointer(buff.TypeIDs)), buff.Len)
-//	fmt.Println(typeIDsSlice)
-//	var tokens = TokensFromBuf(buff)
-//	fmt.Println(tokens)
-//
-//	specialTokensMask, attentionMask := MasksFromBuf(buff)
-//	fmt.Println(specialTokensMask)
-//	fmt.Println(attentionMask)
-//	defer freeBuffer(buff)
-//
-//}
+func getErrorForCode(errCode int32) error {
+	if errCode == SUCCESS {
+		return nil // No error
+	}
+	switch errCode {
+	case ErrInvalidUTF8:
+		return errors.New("invalid UTF-8 in input message")
+	case ErrEncodingFailed:
+		return errors.New("tokenization failed")
+	case ErrNullOutput:
+		return errors.New("internal error: null output buffer")
+	case ErrInvalidTokenizerRef:
+		return errors.New("invalid tokenizer reference")
+	case ErrNullInput:
+		return errors.New("null input provided")
+	case ErrTokenizerCreationFailed:
+		return errors.New("failed to create tokenizer instance")
+	case ErrInvalidPath:
+		return errors.New("invalid file path provided")
+	case ErrFileNotFound:
+		return errors.New("file not found at specified path")
+	case ErrTruncationFailed:
+		return errors.New("truncation failed")
+	case ErrPaddingFailed:
+		return errors.New("padding failed")
+	case ErrDecodeFailed:
+		return errors.New("decoding failed")
+	case ErrCStringConversionFailed:
+		return errors.New("C string conversion failed")
+	case ErrInvalidIDs:
+		return errors.New("invalid IDs provided for decoding")
+	case ErrInvalidOptions:
+		return errors.New("invalid options provided for encoding/decoding")
+	default:
+		return errors.Errorf("unknown error code: %d", errCode)
+	}
+}
