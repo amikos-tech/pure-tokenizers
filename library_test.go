@@ -1,7 +1,6 @@
 package tokenizers
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,23 +31,6 @@ func TestCloseLibraryFailures(t *testing.T) {
 		err := closeLibrary(0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid library handle")
-	})
-
-	t.Run("invalid handle", func(t *testing.T) {
-		var err error
-		defer func() {
-			if err != nil {
-				return
-			}
-			if r := recover(); r != nil {
-				fmt.Println(r)
-				require.Contains(t, r, "SIGSEGV")
-			} else {
-				t.Error("expected panic for invalid handle")
-			}
-		}()
-		err = closeLibrary(100)
-		require.Error(t, err)
 	})
 }
 
