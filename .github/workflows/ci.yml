@@ -69,6 +69,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Install cargo-zigbuild
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
       run: cargo install cargo-zigbuild
 
     - name: Cache cargo registry
@@ -81,7 +82,7 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       # macOS: native toolchain
-    - name: Build & set TOKENIZERS_LIB_PATH (macOS)
+    - name: Build (macOS)
       if: matrix.os == 'macos-latest'
       shell: bash
       run: |
@@ -97,7 +98,7 @@ jobs:
         echo "Using $LIB_PATH"
 
     # Linux: zigbuild for portable glibc/musl
-    - name: Build & set TOKENIZERS_LIB_PATH (Linux)
+    - name: Build (Linux)
       if: matrix.os == 'ubuntu-latest'
       shell: bash
       run: |
@@ -117,7 +118,7 @@ jobs:
         echo "TOKENIZERS_LIB_PATH=$LIB_PATH" >> "$GITHUB_ENV"
         echo "Using $LIB_PATH"
 
-    - name: Build Rust library (Windows)
+    - name: Build (Windows)
       if: matrix.os == 'windows-latest'
       run: |
         $dll = cargo build --release --message-format=json `
@@ -128,17 +129,18 @@ jobs:
         | Select-Object -ExpandProperty FullName -First 1
         
         "TOKENIZERS_LIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+    - name: Run Go linting
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m
 
     - name: Run Go tests
       run: |
         go mod tidy
         make test
 
-    - name: Run Go linting
-      uses: golangci/golangci-lint-action@v6
-      with:
-        version: latest
-        args: --timeout=5m
+    
 
   integration-test:
     name: Integration Tests
