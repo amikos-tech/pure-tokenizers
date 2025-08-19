@@ -24,6 +24,18 @@ gotestsum-bin:
 test: gotestsum-bin build
 	gotestsum \
         --format short-verbose \
+        --packages="./..." \
+        --junitfile unit.xml \
+        -- \
+        -v \
+        -coverprofile=coverage.out \
+        -timeout=30m
+
+# this is meant to run in CI environments where the library path is set up correctly
+.PHONY: test-ci
+test-ci: gotestsum-bin
+	gotestsum \
+        --format short-verbose \
         --rerun-fails=5 \
         --packages="./..." \
         --junitfile unit.xml \
