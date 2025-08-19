@@ -6,6 +6,12 @@ use std::ptr;
 use tokenizers::tokenizer::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy, TruncationStrategy};
 
+// At the top of lib.rs
+const ERROR_INVALID_UTF8: i32 = -1;
+const ERROR_ENCODING_FAILED: i32 = -2;
+const ERROR_NULL_OUTPUT: i32 = -3;
+const ERROR_INVALID_TOKENIZER_REF: i32 = -4;
+
 #[repr(C)]
 pub struct TruncationOptions {
     enabled: bool,
@@ -55,7 +61,7 @@ pub unsafe extern "C" fn from_bytes(
     };
 
     let opts = unsafe { &*opts };
-    tok.set_encode_special_tokens(opts.add_special_tokens); // controls BOS/EOS/etc. insertion.  [oai_citation:3‡Docs.rs](https://docs.rs/tokenizers/latest/tokenizers/tokenizer/struct.Tokenizer.html?utm_source=chatgpt.com)
+    tok.set_encode_special_tokens(opts.add_special_tokens);
 
     if opts.trunc.enabled {
         use tokenizers::tokenizer::{TruncationDirection, TruncationParams};
@@ -76,7 +82,7 @@ pub unsafe extern "C" fn from_bytes(
             strategy: strat,
             stride: opts.trunc.stride,
         }))
-        .unwrap(); // length cap + side strategy.  [oai_citation:4‡GitHub](https://github.com/huggingface/tokenizers/blob/main/tokenizers/src/tokenizer/mod.rs?utm_source=chatgpt.com) [oai_citation:5‡Hugging Face](https://huggingface.co/docs/transformers/en/fast_tokenizers?utm_source=chatgpt.com)
+        .unwrap();
     }
     if opts.pad.enabled {
         tok.with_padding(Some(PaddingParams {
@@ -119,31 +125,22 @@ pub unsafe extern "C" fn encode(
     ptr: *mut libc::c_void,
     message: *const libc::c_char,
     options: &EncodeOptions,
-) -> Buffer {
-    let tokenizer: &Tokenizer;
-    unsafe {
-        tokenizer = ptr
-            .cast::<Tokenizer>()
-            .as_ref()
-            .expect("failed to cast tokenizer");
-    }
+    out: *mut Buffer,
+) -> i32 {
+    let tokenizer: &Tokenizer = match ptr.cast::<Tokenizer>().as_ref() {
+        Some(t) => t,
+        None => return ERROR_INVALID_TOKENIZER_REF, // Return -4 if the tokenizer reference is invalid
+    };
     let message_cstr = unsafe { CStr::from_ptr(message) };
     let message = message_cstr.to_str();
     if message.is_err() {
-        return Buffer {
-            ids: ptr::null_mut(),
-            tokens: ptr::null_mut(),
-            len: 0,
-            type_ids: ptr::null_mut(),
-            special_tokens_mask: ptr::null_mut(),
-            attention_mask: ptr::null_mut(),
-            offsets: ptr::null_mut(),
-        };
+        return ERROR_INVALID_UTF8; // Return -1 if the message cannot be converted to a string
     }
 
-    let encoding = tokenizer
-        .encode(message.unwrap(), options.add_special_tokens)
-        .expect("failed to encode input");
+    let encoding = match tokenizer.encode(message.unwrap(), options.add_special_tokens) {
+        Ok(enc) => enc,
+        Err(_) => return ERROR_ENCODING_FAILED,
+    };
     let mut vec_ids = encoding.get_ids().to_vec();
     vec_ids.shrink_to_fit();
     let ids = vec_ids.as_mut_ptr();
@@ -198,16 +195,21 @@ pub unsafe extern "C" fn encode(
         offsets = vec_offsets.as_mut_ptr();
         std::mem::forget(vec_offsets);
     }
-
-    Buffer {
-        ids,
-        type_ids,
-        special_tokens_mask,
-        attention_mask,
-        tokens,
-        offsets,
-        len,
+    if !out.is_null() {
+        *out = Buffer {
+            ids,
+            type_ids,
+            special_tokens_mask,
+            attention_mask,
+            tokens,
+            offsets,
+            len,
+        };
+    } else {
+        // If out is null, we cannot return the results, so we return an error code
+        return ERROR_NULL_OUTPUT; // Return -3 if the output buffer is null
     }
+    0
 }
 /// # Safety
 /// The caller must ensure that `ptr` is a valid pointer to a heap-allocated Tokenizer object
@@ -268,8 +270,16 @@ pub extern "C" fn free_tokenizer(ptr: *mut ::libc::c_void) {
     }
 }
 
+/// # Safety
+/// The caller must ensure that `buf` is a valid pointer to a `Buffer` struct
+/// previously returned by the `encode` function.
 #[no_mangle]
-pub extern "C" fn free_buffer(buf: Buffer) {
+pub unsafe extern "C" fn free_buffer(buf: *mut Buffer) {
+    if buf.is_null() {
+        return;
+    }
+    let buf = &mut *buf;
+    // Free the memory allocated for the fields in the Buffer struct
     if !buf.ids.is_null() {
         unsafe {
             Vec::from_raw_parts(buf.ids, buf.len, buf.len);

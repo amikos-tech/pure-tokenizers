@@ -2,11 +2,12 @@ package tokenizers
 
 import (
 	"fmt"
-	"github.com/ebitengine/purego"
 	"os"
 	"path/filepath"
 	"runtime"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
 )
 
 type TruncationDirection uint8
@@ -191,9 +192,9 @@ type Tokenizer struct {
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
 	fromFile            func(config string) unsafe.Pointer
 	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions) unsafe.Pointer
-	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions) Buffer
-	freeBuffer          func(buffer Buffer)
+	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
+	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool) *string
 	vocabSize           func(ptr unsafe.Pointer) uint32
@@ -218,17 +219,6 @@ func getLibraryName() string {
 	default: // linux and others
 		return fmt.Sprintf("lib%s.so", LibName)
 	}
-}
-
-func loadLibrary(path string) (uintptr, error) {
-	libh, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return 0, fmt.Errorf("failed to load shared library: %w", err)
-	}
-	if libh == 0 {
-		return 0, fmt.Errorf("shared library handle is nil after loading: %s", path)
-	}
-	return libh, nil
 }
 
 func LoadTokenizerLibrary(userProvidedPath string) (uintptr, error) {
@@ -302,7 +292,6 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	tokenizer.libh = libh
 	purego.RegisterLibFunc(&tokenizer.fromFile, tokenizer.libh, "from_file")
 	purego.RegisterLibFunc(&tokenizer.fromBytes, tokenizer.libh, "from_bytes")
-	//purego.RegisterLibFunc(&tokenizer.fromBytesWithTruncation, tokenizer.libh, "from_bytes_with_truncation")
 	purego.RegisterLibFunc(&tokenizer.encode, tokenizer.libh, "encode")
 	purego.RegisterLibFunc(&tokenizer.freeBuffer, tokenizer.libh, "free_buffer")
 	purego.RegisterLibFunc(&tokenizer.freeTokenizer, tokenizer.libh, "free_tokenizer")
@@ -340,7 +329,7 @@ func (t *Tokenizer) Close() error {
 		t.freeTokenizer(t.tokenizerh)
 		t.tokenizerh = nil
 	}
-	err := purego.Dlclose(t.libh)
+	err := closeLibrary(t.libh)
 	if err != nil {
 		return fmt.Errorf("failed to close shared library: %w", err)
 	}
@@ -357,20 +346,38 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 			return nil, fmt.Errorf("failed to apply encoding option: %w", err)
 		}
 	}
-	buff := t.encode(t.tokenizerh, message, &options)
+	var buff Buffer
+	rc := t.encode(t.tokenizerh, message, &options, &buff)
+	if rc < 0 {
+		switch rc {
+		case -1:
+			return nil, fmt.Errorf("invalid UTF-8 in input message")
+		case -2:
+			return nil, fmt.Errorf("tokenization failed")
+		case -3:
+			return nil, fmt.Errorf("internal error: null output buffer")
+		default:
+			return nil, fmt.Errorf("unknown error code: %d", rc)
+		}
+	}
+	defer func() {
+		t.freeBuffer(&buff)
+	}()
 	result := &EncodeResult{}
 	if buff.IDs != nil {
-		result.IDs = unsafe.Slice(buff.IDs, buff.Len)
+		result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...)
 	}
 	if buff.TypeIDs != nil {
-		result.TypeIDs = unsafe.Slice(buff.TypeIDs, buff.Len)
+		result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...)
 	}
 	specialTokensMask, attentionMask := MasksFromBuf(buff)
 	if specialTokensMask != nil {
-		result.SpecialTokensMask = specialTokensMask
+		result.SpecialTokensMask = make([]uint32, 0, len(specialTokensMask))
+		result.SpecialTokensMask = append(result.SpecialTokensMask, specialTokensMask...)
 	}
 	if attentionMask != nil {
-		result.AttentionMask = attentionMask
+		result.AttentionMask = make([]uint32, 0, len(attentionMask))
+		result.AttentionMask = append(result.AttentionMask, attentionMask...)
 	}
 	result.Tokens = TokensFromBuf(buff)
 	if buff.Offsets != nil {

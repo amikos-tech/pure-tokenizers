@@ -57,7 +57,12 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          musl-tools \
+          g++-aarch64-linux-gnu \
+          libc6-dev-arm64-cross \
+          pkg-config  
 
     - name: Cache cargo registry
       uses: actions/cache@v4
@@ -65,34 +70,56 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
         key: cross-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Install cross
       run: cargo install cross --git https://github.com/cross-rs/cross
 
-    - name: Cross compile
+    - name: Clean target dir (Unix)
+      if: matrix.os != 'windows-latest'
+      shell: bash
+      run: rm -rf target
+
+    - name: Clean target dir (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
+
+    - name: Cross compile (Linux)
+      if: matrix.os == 'ubuntu-latest'
       run: |
-        if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-          cross build --release --target ${{ matrix.target }}
-        else
-          cargo build --release --target ${{ matrix.target }}
-        fi
+        cross build --release --target ${{ matrix.target }}
+
+    - name: Cross compile (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cargo build --release --target ${{ matrix.target }}
+
+    - name: Cross compile (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        cargo build --release --target ${{ matrix.target }}
 
     - name: Verify library exists (Unix)
       if: matrix.os != 'windows-latest'
+      shell: bash
       run: |
-        if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] || [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-          ls -la target/${{ matrix.target }}/release/libtokenizers.dylib
-          file target/${{ matrix.target }}/release/libtokenizers.dylib
-        else
-          ls -la target/${{ matrix.target }}/release/libtokenizers.so
-          file target/${{ matrix.target }}/release/libtokenizers.so
-        fi
+        set -euo pipefail
+        case "${{ matrix.target }}" in
+          *-apple-darwin)        ART="libtokenizers.dylib" ;;
+          *-unknown-linux-gnu)   ART="libtokenizers.so"    ;;
+          *-unknown-linux-musl)  ART="libtokenizers.a"     ;;  # static on musl
+          *) echo "Unknown target: ${{ matrix.target }}"; exit 1 ;;
+        esac
+        P="target/${{ matrix.target }}/release/${ART}"
+        echo "Expecting $P"
+        ls -la "$P"
+        file "$P" || true
 
     - name: Verify library exists (Windows)
       if: matrix.os == 'windows-latest'
+      shell: pwsh
       run: |
-        dir target\${{ matrix.target }}\release\libtokenizers.dll
-        file target\${{ matrix.target }}\release\libtokenizers.dll
-      shell: bash
+        $art = "tokenizers.dll"
+        $p = "target/${{ matrix.target }}/release/$art"
+        Get-Item $p
