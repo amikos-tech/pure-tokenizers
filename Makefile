@@ -34,7 +34,7 @@ test: gotestsum-bin build
 
 # this is meant to run in CI environments where the library path is set up correctly
 .PHONY: test-ci
-test: gotestsum-bin
+test-ci: gotestsum-bin
 	gotestsum \
         --format short-verbose \
         --rerun-fails=5 \
