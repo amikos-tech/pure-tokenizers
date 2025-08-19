@@ -24,7 +24,6 @@ gotestsum-bin:
 test: gotestsum-bin build
 	gotestsum \
         --format short-verbose \
-        --rerun-fails=5 \
         --packages="./..." \
         --junitfile unit.xml \
         -- \

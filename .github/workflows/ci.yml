@@ -103,11 +103,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        # Optionally set a target, e.g. x86_64-unknown-linux-gnu or -musl
-        TARGET="${{ matrix.target || '' }}"
         ARGS=(--release --message-format=json)
-        [[ -n "$TARGET" ]] && ARGS+=(--target "$TARGET")
-
+        
         LIB_PATH="$(
           cargo zigbuild "${ARGS[@]}" |
           jq -r 'select(.reason=="compiler-artifact")
@@ -121,14 +118,61 @@ jobs:
     - name: Build (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        $dll = cargo build --release --message-format=json `
-        | % { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } `
+        $ErrorActionPreference = "Stop"
+
+        # Build and capture output
+        $buildOutput = cargo build --release --message-format=json
+        if ($LASTEXITCODE -ne 0) {
+          throw "Cargo build failed with exit code $LASTEXITCODE"
+        }
+
+        # Parse and find DLL
+        $dll = $buildOutput `
+        | % { 
+            try { 
+              $_ | ConvertFrom-Json 
+            } catch { 
+              Write-Warning "Failed to parse JSON: $_"
+              $null 
+            }
+          } `
         | ? { $_.reason -eq "compiler-artifact" -and $_.target.kind -contains "cdylib" } `
         | % { $_.filenames } | ? { $_ -like "*.dll" } `
         | Get-Item | Sort-Object LastWriteTime -Descending `
         | Select-Object -ExpandProperty FullName -First 1
-        
+
+        # Validate result
+        if (-not $dll) {
+          throw "No DLL found in build output"
+        }
+
+        if (-not (Test-Path $dll)) {
+          throw "DLL path does not exist: $dll"
+        }
+
         "TOKENIZERS_LIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        Write-Host "Using DLL: $dll"
+
+    - name: Check Library Path (Linux/macOS)
+      if: matrix.os != 'windows-latest'
+      shell: bash
+      run: |
+        if [ -z "$TOKENIZERS_LIB_PATH" ]; then
+          echo "TOKENIZERS_LIB_PATH is not set. Ensure the build step succeeded."
+          exit 1
+        fi
+        file "$P" || true
+
+    - name: Check Library Path (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        if (-not $env:TOKENIZERS_LIB_PATH) {
+          Write-Error "TOKENIZERS_LIB_PATH is not set. Ensure the build step succeeded."
+          exit 1
+        }
+        Get-Item $env:TOKENIZERS_LIB_PATH
+
     - name: Run Go linting
       uses: golangci/golangci-lint-action@v6
       with:
