@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -413,4 +414,66 @@ func TestErrors(t *testing.T) {
 	// Test unsupported tokenizer type
 	_, err = FromFile("./unsupported_tokenizer_type.json")
 	require.Error(t, err, "Expected error for unsupported tokenizer type")
+}
+
+func TestAbi(t *testing.T) {
+	t.Run("Compatible ABI", func(t *testing.T) {
+		constraint, err := semver.NewConstraint("v0.1.x")
+		require.NoError(t, err)
+		mockt := &Tokenizer{
+			getVersion: func() string {
+				return "0.1.0"
+			},
+		}
+		err = mockt.abiCheck(constraint)
+		require.NoError(t, err)
+	})
+	t.Run("Incompatible ABI", func(t *testing.T) {
+		constraint, err := semver.NewConstraint("v0.2.x")
+		require.NoError(t, err)
+		mockt := &Tokenizer{
+			getVersion: func() string {
+				return "0.1.0"
+			},
+		}
+		err = mockt.abiCheck(constraint)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not compatible")
+	})
+
+	t.Run("Nil constraint", func(t *testing.T) {
+
+		mockt := &Tokenizer{
+			getVersion: func() string {
+				return "0.1.0"
+			},
+		}
+		err := mockt.abiCheck(nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ABI version constraint cannot be nil")
+	})
+
+	t.Run("getVersion uninitialized", func(t *testing.T) {
+		constraint, err := semver.NewConstraint("v0.2.x")
+		require.NoError(t, err)
+		mockt := &Tokenizer{
+			getVersion: nil,
+		}
+		err = mockt.abiCheck(constraint)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "getVersion function is not initialized")
+	})
+
+	t.Run("Invalid version", func(t *testing.T) {
+		constraint, err := semver.NewConstraint("v0.2.x")
+		require.NoError(t, err)
+		mockt := &Tokenizer{
+			getVersion: func() string {
+				return "dqwe12321"
+			},
+		}
+		err = mockt.abiCheck(constraint)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse version string")
+	})
 }

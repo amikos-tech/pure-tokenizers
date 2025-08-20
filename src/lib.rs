@@ -339,7 +339,7 @@ pub unsafe extern "C" fn decode(
     ids: *const u32,
     len: u32,
     skip_special_tokens: bool,
-    out: *mut *mut libc::c_char, // <— pointer-to-pointer
+    out: *mut *mut libc::c_char,
 ) -> i32 {
     if ptr.is_null() {
         return ERROR_INVALID_TOKENIZER_REF;
@@ -497,4 +497,14 @@ pub extern "C" fn get_error_message(code: i32) -> *const libc::c_char {
     };
 
     message.as_ptr() as *const libc::c_char
+}
+
+/// Returns the library's version string (e.g., "1.3.0").
+#[no_mangle]
+pub extern "C" fn get_version() -> *const libc::c_char {
+    // compile-time NUL-terminated string
+    static VERSION: &CStr = unsafe {
+        CStr::from_bytes_with_nul_unchecked(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes())
+    };
+    VERSION.as_ptr()
 }
