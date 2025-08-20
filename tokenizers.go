@@ -27,7 +27,7 @@ const (
 	ErrInvalidOptions          = -14
 )
 
-const AbiCompatibilityConstraint = "0.1.x"
+const AbiCompatibilityConstraint = "^0.1.x"
 
 // result structs
 

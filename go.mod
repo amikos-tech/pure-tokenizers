@@ -7,7 +7,6 @@ require (
 	github.com/ebitengine/purego v0.8.4
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/mod v0.27.0
 	golang.org/x/sys v0.35.0
 )
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/ebitengine/purego"
 	"github.com/stretchr/testify/require"
 )
 
@@ -428,6 +429,18 @@ func TestAbi(t *testing.T) {
 		err = mockt.abiCheck(constraint)
 		require.NoError(t, err)
 	})
+
+	t.Run("Compatible ABI - pre-release", func(t *testing.T) {
+		constraint, err := semver.NewConstraint("^v0.2.0-0")
+		require.NoError(t, err)
+		mockt := &Tokenizer{
+			getVersion: func() string {
+				return "0.2.0-alpha.1"
+			},
+		}
+		err = mockt.abiCheck(constraint)
+		require.NoError(t, err)
+	})
 	t.Run("Incompatible ABI", func(t *testing.T) {
 		constraint, err := semver.NewConstraint("v0.2.x")
 		require.NoError(t, err)
@@ -475,5 +488,26 @@ func TestAbi(t *testing.T) {
 		err = mockt.abiCheck(constraint)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to parse version string")
+	})
+
+	t.Run("GetVersion from Rust", func(t *testing.T) {
+		libpath := checkLibraryExists(t)
+		var libh uintptr
+		var err error
+		libh, err = loadLibrary(libpath)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if libh != 0 {
+				_ = closeLibrary(libh)
+			}
+		})
+		constraint, err := semver.NewConstraint(AbiCompatibilityConstraint)
+		require.NoError(t, err)
+		mockt := &Tokenizer{}
+		purego.RegisterLibFunc(&mockt.getVersion, libh, "get_version")
+		require.NotNil(t, mockt.getVersion, "getVersion function should not be nil")
+		err = mockt.abiCheck(constraint)
+		require.NoError(t, err)
+
 	})
 }
