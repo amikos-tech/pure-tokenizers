@@ -4,6 +4,7 @@ import (
 	"os"
 	"unsafe"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/ebitengine/purego"
 	"github.com/pkg/errors"
 )
@@ -25,6 +26,8 @@ const (
 	ErrInvalidIDs              = -13
 	ErrInvalidOptions          = -14
 )
+
+const AbiCompatibilityConstraint = "^0.1.x"
 
 // result structs
 
@@ -222,6 +225,7 @@ type Tokenizer struct {
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
+	getVersion          func() string
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -257,6 +261,10 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 			ReturnTokens: true,
 		},
 	}
+	constraint, err := semver.NewConstraint(AbiCompatibilityConstraint)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse ABI version constraint: %s", AbiCompatibilityConstraint)
+	}
 	for _, opt := range opts {
 		if err := opt(tokenizer); err != nil {
 			return nil, errors.Wrapf(err, "failed to apply tokenizer option")
@@ -275,6 +283,7 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.freeString, tokenizer.libh, "free_string")
 	purego.RegisterLibFunc(&tokenizer.decode, tokenizer.libh, "decode")
 	purego.RegisterLibFunc(&tokenizer.vocabSize, tokenizer.libh, "vocab_size")
+	purego.RegisterLibFunc(&tokenizer.getVersion, tokenizer.libh, "get_version")
 
 	tOpts := &TokenizerOptions{}
 	if tokenizer.TruncationEnabled {
@@ -301,8 +310,35 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 		return nil, errors.Wrapf(lastError, "failed to create tokenizer from bytes")
 	}
 	tokenizer.tokenizerh = result.Tokenizer
+
+	if err = tokenizer.abiCheck(constraint); err != nil {
+		defer func() {
+			_ = tokenizer.Close()
+		}()
+		return nil, errors.Wrap(err, "failed to check tokenizer abi")
+	}
 	return tokenizer, nil
 }
+
+// abiCheck check the ABI version of the Rust lib to check for compatibility
+func (t *Tokenizer) abiCheck(constraint *semver.Constraints) error {
+	if constraint == nil {
+		return errors.New("ABI version constraint cannot be nil")
+	}
+	if t.getVersion == nil {
+		return errors.New("getVersion function is not initialized, cannot check ABI version")
+	}
+	v := t.getVersion()
+	ver, err := semver.NewVersion(v)
+	if err != nil {
+		return errors.Wrapf(err, "failed to parse version string: %s", v)
+	}
+	if !constraint.Check(ver) {
+		return errors.Errorf("tokenizer lib version %s is not compatible with supported version constraint %s", v, constraint.String())
+	}
+	return nil
+}
+
 func (t *Tokenizer) Close() error {
 	if t.tokenizerh != nil {
 		t.freeTokenizer(t.tokenizerh)
