@@ -14,6 +14,17 @@ CGo-free tokenizers for Go with automatic library management.
 
 ## Quick Start
 
+First, get a tokenizer configuration file:
+
+```bash
+# Download a tokenizer from Hugging Face
+curl -o tokenizer.json https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
+
+# Or use the example tokenizer.json included in this repository
+```
+
+Then use it in your Go code:
+
 ```go
 package main
 
@@ -25,39 +36,21 @@ import (
 )
 
 func main() {
-    // Create a simple BERT-like tokenizer configuration
-    config := `{
-        "version": "1.0",
-        "truncation": null,
-        "padding": null,
-        "added_tokens": [
-            {"id": 0, "content": "[PAD]", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
-            {"id": 100, "content": "[UNK]", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
-            {"id": 101, "content": "[CLS]", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
-            {"id": 102, "content": "[SEP]", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true}
-        ],
-        "normalizer": {"type": "BertNormalizer", "clean_text": true, "handle_chinese_chars": true, "strip_accents": null, "lowercase": true},
-        "pre_tokenizer": {"type": "BertPreTokenizer"},
-        "post_processor": {"type": "BertProcessing", "sep": ["[SEP]", 102], "cls": ["[CLS]", 101]},
-        "decoder": {"type": "WordPiece", "prefix": "##", "cleanup": true},
-        "model": {"type": "WordPiece", "unk_token": "[UNK]", "continuing_subword_prefix": "##", "max_input_chars_per_word": 100, "vocab": {"[PAD]": 0, "[UNK]": 100, "[CLS]": 101, "[SEP]": 102, "hello": 7592, "world": 2088, ",": 1010, "!": 999}}
-    }`
-
-    // Create tokenizer from configuration
-    tokenizer, err := tokenizers.FromBytes([]byte(config))
+    // Load tokenizer from file
+    tokenizer, err := tokenizers.FromFile("tokenizer.json")
     if err != nil {
         log.Fatal(err)
     }
     defer tokenizer.Close()
 
     // Tokenize text
-    encoding, err := tokenizer.Encode("Hello, world!", true)
+    encoding, err := tokenizer.Encode("Hello, world!", tokenizers.WithAddSpecialTokens())
     if err != nil {
         log.Fatal(err)
     }
 
     fmt.Println("Tokens:", encoding.Tokens)
-    // Output: Tokens: [[CLS] hello , world ! [SEP]]
+    fmt.Println("Token IDs:", encoding.IDs)
 }
 ```
 
@@ -101,10 +94,10 @@ if err != nil {
 defer tokenizer.Close()
 
 // Simple encoding
-encoding, err := tokenizer.Encode("Hello, world!", false)
+encoding, err := tokenizer.Encode("Hello, world!")
 
 // With special tokens
-encoding, err := tokenizer.Encode("Hello, world!", true)
+encoding, err := tokenizer.Encode("Hello, world!", tokenizers.WithAddSpecialTokens())
 ```
 
 ### Advanced Options
