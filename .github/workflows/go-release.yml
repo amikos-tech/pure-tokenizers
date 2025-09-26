@@ -1,0 +1,153 @@
+name: Go Release
+
+# Triggered by v* tags for Go module releases
+on:
+  push:
+    tags:
+      - 'v*'
+      - '!v*-*'  # Exclude pre-releases like v1.0.0-beta
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test Go Module
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.24']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Run Go linting
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m
+
+    # Download the latest Rust library release for testing
+    - name: Get latest Rust release (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        LATEST_RUST=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RUST" ]; then
+          echo "ERROR: No Rust release found. Please create a Rust release first."
+          exit 1
+        fi
+        echo "Using Rust release: $LATEST_RUST"
+        gh release download $LATEST_RUST --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+        mkdir -p test-lib
+        tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+        echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Get latest Rust release (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+          ARCH="aarch64"
+        elif [ "$ARCH" = "x86_64" ]; then
+          ARCH="x86_64"
+        fi
+        LATEST_RUST=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RUST" ]; then
+          echo "ERROR: No Rust release found. Please create a Rust release first."
+          exit 1
+        fi
+        echo "Using Rust release: $LATEST_RUST"
+        gh release download $LATEST_RUST --pattern "libtokenizers-${ARCH}-apple-darwin.tar.gz"
+        mkdir -p test-lib
+        tar -xzf libtokenizers-${ARCH}-apple-darwin.tar.gz -C test-lib
+        echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.dylib" >> $GITHUB_ENV
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Get latest Rust release (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $latestRust = gh release list --repo ${{ github.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        if (-not $latestRust) {
+          Write-Error "No Rust release found. Please create a Rust release first."
+          exit 1
+        }
+        $releaseTag = ($latestRust -split "`t")[0]
+        Write-Host "Using Rust release: $releaseTag"
+        gh release download $releaseTag --pattern "libtokenizers-x86_64-pc-windows-msvc.tar.gz"
+        New-Item -ItemType Directory -Force -Path test-lib
+        tar -xzf libtokenizers-x86_64-pc-windows-msvc.tar.gz -C test-lib
+        "TOKENIZERS_LIB_PATH=$(Get-Location)\test-lib\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Run Go tests
+      run: |
+        go mod tidy
+        go test -v -race -coverprofile=coverage.out -timeout=30m ./...
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+  release:
+    name: Create Go Module Release
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get Rust library version info
+      id: rust-version
+      run: |
+        LATEST_RUST=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        echo "rust_version=$LATEST_RUST" >> $GITHUB_OUTPUT
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Go Module ${{ github.ref_name }}
+        body: |
+          ## Go Module Release
+
+          This release of the Go tokenizers module is compatible with Rust library version `${{ steps.rust-version.outputs.rust_version }}`.
+
+          ### Installation
+
+          ```bash
+          go get github.com/amikos-tech/pure-tokenizers@${{ github.ref_name }}
+          ```
+
+          ### Features
+          - CGo-free implementation using purego
+          - Automatic library download and caching
+          - Support for multiple platforms (Linux, macOS, Windows)
+          - Compatible with HuggingFace tokenizers
+
+          ### Requirements
+          - Go 1.24 or later
+          - Compatible Rust tokenizers library (downloaded automatically)
+
+          ### Environment Variables
+          - `TOKENIZERS_LIB_PATH`: Override library path
+          - `TOKENIZERS_GITHUB_REPO`: Custom GitHub repository
+          - `TOKENIZERS_VERSION`: Specific Rust library version to use
+
+          ### Documentation
+          See the [README](https://github.com/${{ github.repository }}) for detailed usage instructions.
+
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

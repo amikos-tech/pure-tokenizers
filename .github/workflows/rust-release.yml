@@ -1,8 +1,10 @@
-name: Build and Release
+name: Rust Release
 
+# Triggered by rust-v* tags for Rust library releases
 on:
-  release:
-    types: [ created ]
+  push:
+    tags:
+      - 'rust-v*'
 permissions:
   actions: write
   packages: write
@@ -199,47 +201,12 @@ jobs:
         name: ${{ matrix.target }}-build
         path: ${{ matrix.archive-name }}
 
-  test:
-    name: Test Go bindings
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Download Linux x86_64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: x86_64-unknown-linux-gnu-build
-          path: ./
-
-      - name: Extract library for testing
-        run: |
-          mkdir -p test-lib
-          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
-          export TOKENIZERS_LIB_PATH="$(pwd)/test-lib/libtokenizers.so"
-          echo "TOKENIZERS_LIB_PATH=$TOKENIZERS_LIB_PATH" >> $GITHUB_ENV
-
-          # Verify extraction
-          echo "Extracted files:"
-          ls -la test-lib/
-
-      - name: Run Go tests
-        run: |
-          go mod tidy
-          go test -v ./...
+  # Skip Go tests in Rust release workflow since Go has its own release process
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [build, test]
-    # This job runs when the workflow is triggered by a release creation
-    if: github.event_name == 'release'
+    needs: build
+    # Create GitHub release for Rust library
 
     steps:
       - name: Checkout code
@@ -264,13 +231,32 @@ jobs:
           echo "Example archive contents:"
           tar -tzf release-assets/libtokenizers-x86_64-unknown-linux-gnu.tar.gz || true
 
-      - name: Upload Release Assets
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
-          # Since this workflow is triggered by a release event,
-          # the release already exists, so we just add the assets
+          name: Rust Library ${{ github.ref_name }}
+          body: |
+            ## Rust Tokenizers Library Release
+
+            This release contains pre-built tokenizers libraries for multiple platforms.
+
+            ### Supported Platforms
+            - Linux x86_64 (GNU)
+            - Linux aarch64 (GNU)
+            - Linux x86_64 (MUSL)
+            - Linux aarch64 (MUSL)
+            - macOS x86_64
+            - macOS aarch64 (Apple Silicon)
+            - Windows x86_64
+
+            ### Installation
+            Download the appropriate archive for your platform and extract the library file.
+
+            ### Usage with Go bindings
+            The Go bindings will automatically download these libraries when needed.
+            You can also set `TOKENIZERS_LIB_PATH` environment variable to use a specific library.
           fail_on_unmatched_files: true
-          # The tag is automatically inferred from the release event
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

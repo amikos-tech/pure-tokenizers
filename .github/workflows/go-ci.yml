@@ -1,0 +1,155 @@
+name: Go CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    name: Go Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.24']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Run Go linting
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --timeout=5m
+
+    # Download pre-built Rust library for testing
+    # This assumes a recent Rust release is available
+    - name: Download latest Rust library (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          sudo apt-get update && sudo apt-get install -y cargo
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+        fi
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Download latest Rust library (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+          ARCH="aarch64"
+        elif [ "$ARCH" = "x86_64" ]; then
+          ARCH="x86_64"
+        fi
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-${ARCH}-apple-darwin.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-${ARCH}-apple-darwin.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.dylib" >> $GITHUB_ENV
+        fi
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Download latest Rust library (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $latestRelease = gh release list --repo ${{ github.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        if ($latestRelease) {
+          $releaseTag = ($latestRelease -split "`t")[0]
+          Write-Host "Using Rust release: $releaseTag"
+          gh release download $releaseTag --pattern "libtokenizers-x86_64-pc-windows-msvc.tar.gz"
+          New-Item -ItemType Directory -Force -Path test-lib
+          tar -xzf libtokenizers-x86_64-pc-windows-msvc.tar.gz -C test-lib
+          "TOKENIZERS_LIB_PATH=$(Get-Location)\test-lib\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+          Write-Host "No Rust release found, building locally"
+          cargo build --release
+          "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        }
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Run Go tests
+      run: |
+        go mod tidy
+        go test -v -coverprofile=coverage.out -timeout=30m ./...
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: go-test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Download latest Rust library
+      run: |
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+        fi
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Test download functionality
+      run: |
+        go test -v -run "TestDownloadFunctionality|TestGetLibraryInfo"
+
+    - name: Test library loading
+      run: |
+        go test -v -run "TestGetCachedLibraryPath|TestCacheDirectory"

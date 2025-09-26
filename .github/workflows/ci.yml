@@ -1,5 +1,7 @@
-name: CI
+name: Integration CI
 
+# Main integration CI that runs when both Rust and Go code changes
+# Individual language CI runs are in rust-ci.yml and go-ci.yml
 on:
   push:
     branches: [ main ]
