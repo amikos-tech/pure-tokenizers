@@ -46,17 +46,15 @@ func TestABIVersionChecking(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			constraint, err := semver.NewConstraint(tt.constraint)
-			require.NoError(t, err, "Failed to create constraint")
-
-			// Create a mock tokenizer with ABI version
+			// Create a mock tokenizer with version
 			tokenizer := &Tokenizer{
-				getAbiVersion: func() string {
+				getVersion: func() string {
 					return tt.abiVersion
 				},
 			}
 
-			err = tokenizer.abiCheck(constraint)
+			constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
+			err := tokenizer.abiCheck(constraint)
 
 			if tt.shouldPass {
 				assert.NoError(t, err, "Expected ABI check to pass")
@@ -70,59 +68,40 @@ func TestABIVersionChecking(t *testing.T) {
 	}
 }
 
-func TestABICheckWithFallback(t *testing.T) {
-	constraint, err := semver.NewConstraint("^0.1.x")
-	require.NoError(t, err, "Failed to create constraint")
-
-	t.Run("Uses ABI version when available", func(t *testing.T) {
+func TestVersionCheck(t *testing.T) {
+	t.Run("Uses version for compatibility check", func(t *testing.T) {
 		tokenizer := &Tokenizer{
-			getAbiVersion: func() string {
-				return "0.1.0"
-			},
-			getVersion: func() string {
-				return "1.0.0" // Different from ABI version
-			},
-		}
-
-		err := tokenizer.abiCheck(constraint)
-		assert.NoError(t, err, "Should use ABI version for compatibility check")
-	})
-
-	t.Run("Falls back to package version when ABI version not available", func(t *testing.T) {
-		tokenizer := &Tokenizer{
-			getAbiVersion: nil, // No ABI version function
 			getVersion: func() string {
 				return "0.1.0"
 			},
 		}
 
+		constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
 		err := tokenizer.abiCheck(constraint)
-		assert.NoError(t, err, "Should fallback to package version")
+		assert.NoError(t, err, "Should use version for compatibility check")
 	})
 
-	t.Run("Returns error when neither version available", func(t *testing.T) {
+	t.Run("Returns error when version not available", func(t *testing.T) {
 		tokenizer := &Tokenizer{
-			getAbiVersion: nil,
-			getVersion:    nil,
+			getVersion: nil,
 		}
 
+		constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
 		err := tokenizer.abiCheck(constraint)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "neither getAbiVersion nor getVersion")
+		assert.Contains(t, err.Error(), "getVersion function is not initialized")
 	})
 }
 
 func TestABIErrorMessages(t *testing.T) {
-	constraint, err := semver.NewConstraint("^0.1.x")
-	require.NoError(t, err)
-
 	tokenizer := &Tokenizer{
-		getAbiVersion: func() string {
+		getVersion: func() string {
 			return "0.2.0" // Incompatible version
 		},
 	}
 
-	err = tokenizer.abiCheck(constraint)
+	constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
+	err := tokenizer.abiCheck(constraint)
 	require.Error(t, err)
 
 	// Check that error message includes helpful guidance

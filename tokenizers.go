@@ -27,6 +27,9 @@ const (
 	ErrInvalidOptions          = -14
 )
 
+// AbiCompatibilityConstraint defines the required version range for ABI compatibility.
+// The library version from Cargo.toml is used as the ABI version.
+// Update this constraint when making breaking changes to the FFI interface.
 const AbiCompatibilityConstraint = "^0.1.x"
 
 // result structs
@@ -225,8 +228,7 @@ type Tokenizer struct {
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
-	getVersion          func() string
-	getAbiVersion       func() string
+	getVersion func() string
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -285,8 +287,6 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.decode, tokenizer.libh, "decode")
 	purego.RegisterLibFunc(&tokenizer.vocabSize, tokenizer.libh, "vocab_size")
 	purego.RegisterLibFunc(&tokenizer.getVersion, tokenizer.libh, "get_version")
-	// Try to register the new ABI version function, fallback gracefully for older libraries
-	purego.RegisterLibFunc(&tokenizer.getAbiVersion, tokenizer.libh, "get_abi_version")
 
 	tOpts := &TokenizerOptions{}
 	if tokenizer.TruncationEnabled {
@@ -329,17 +329,11 @@ func (t *Tokenizer) abiCheck(constraint *semver.Constraints) error {
 		return errors.New("ABI version constraint cannot be nil")
 	}
 
-	// Prefer using the dedicated ABI version function if available
-	var versionStr string
-	if t.getAbiVersion != nil {
-		versionStr = t.getAbiVersion()
-		// If we got the ABI version, use it for compatibility check
-	} else if t.getVersion != nil {
-		// Fallback to package version for backward compatibility with older libraries
-		versionStr = t.getVersion()
-	} else {
-		return errors.New("neither getAbiVersion nor getVersion function is initialized, cannot check compatibility")
+	// Get the library version for ABI compatibility checking
+	if t.getVersion == nil {
+		return errors.New("getVersion function is not initialized, cannot check compatibility")
 	}
+	versionStr := t.getVersion()
 
 	ver, err := semver.NewVersion(versionStr)
 	if err != nil {

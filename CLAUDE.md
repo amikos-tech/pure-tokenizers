@@ -95,6 +95,13 @@ The system follows a priority order for loading the tokenizer library:
 3. Cached library in platform-specific directory
 4. Automatic download from GitHub releases to cache
 
+### Version Management
+The project uses a single version from `Cargo.toml` for both the library and ABI compatibility:
+- The `get_version()` function returns the Cargo package version (e.g., "0.1.0")
+- This same version is used for ABI compatibility checking
+- The Go side checks compatibility using the constraint `^0.1.x`
+- When making breaking FFI changes, update the version in `Cargo.toml` following semantic versioning
+
 ### Core Components
 
 **Go Layer (tokenizers.go)**
@@ -162,7 +169,8 @@ make clean
 
 ## Key Implementation Details
 
-- **ABI Compatibility**: Version checking ensures Go/Rust interface compatibility (`AbiCompatibilityConstraint = "^0.1.x"`)
+- **ABI Compatibility**: The library version from `Cargo.toml` is used for compatibility checking (`AbiCompatibilityConstraint = "^0.1.x"`). The `get_version()` FFI function returns this version.
 - **Memory Safety**: Proper cleanup of FFI resources with defer statements
 - **Buffer Management**: Zero-copy where possible, explicit memory management for C strings
 - **Cross-platform**: Uses runtime detection for platform-specific library names and paths
+- Always lint both golang and rust before commiting or pushing code

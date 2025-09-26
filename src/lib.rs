@@ -499,26 +499,17 @@ pub extern "C" fn get_error_message(code: i32) -> *const libc::c_char {
     message.as_ptr() as *const libc::c_char
 }
 
-/// Returns the library's version string (e.g., "1.3.0").
+/// Returns the library's version string (e.g., "0.1.0").
+/// This version is used for ABI compatibility checking.
+/// The version follows semantic versioning and should be updated when:
+/// - Breaking changes are made to the FFI interface (major version bump)
+/// - New functions are added (minor version bump)
+/// - Bug fixes that don't affect the interface (patch version bump)
 #[no_mangle]
 pub extern "C" fn get_version() -> *const libc::c_char {
-    // compile-time NUL-terminated string
+    // compile-time NUL-terminated string from Cargo.toml
     static VERSION: &CStr = unsafe {
         CStr::from_bytes_with_nul_unchecked(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes())
     };
     VERSION.as_ptr()
-}
-
-/// ABI version for FFI compatibility tracking
-/// This version should be updated when breaking changes are made to the FFI interface
-#[allow(dead_code)]
-const ABI_VERSION: &str = "0.1.0";
-
-/// Returns the ABI version string for compatibility checking
-/// This is separate from the library version to track FFI interface changes
-#[no_mangle]
-pub extern "C" fn get_abi_version() -> *const libc::c_char {
-    static ABI_VERSION_CSTR: &CStr =
-        unsafe { CStr::from_bytes_with_nul_unchecked(concat!("0.1.0", "\0").as_bytes()) };
-    ABI_VERSION_CSTR.as_ptr()
 }

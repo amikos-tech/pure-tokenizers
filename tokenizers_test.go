@@ -467,26 +467,23 @@ func TestAbi(t *testing.T) {
 	})
 
 	t.Run("getVersion uninitialized", func(t *testing.T) {
-		constraint, err := semver.NewConstraint("v0.2.x")
-		require.NoError(t, err)
 		mockt := &Tokenizer{
-			getVersion:    nil,
-			getAbiVersion: nil,
+			getVersion: nil,
 		}
-		err = mockt.abiCheck(constraint)
+		constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
+		err := mockt.abiCheck(constraint)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "neither getAbiVersion nor getVersion function is initialized")
+		require.Contains(t, err.Error(), "getVersion function is not initialized")
 	})
 
 	t.Run("Invalid version", func(t *testing.T) {
-		constraint, err := semver.NewConstraint("v0.2.x")
-		require.NoError(t, err)
 		mockt := &Tokenizer{
 			getVersion: func() string {
 				return "dqwe12321"
 			},
 		}
-		err = mockt.abiCheck(constraint)
+		constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
+		err := mockt.abiCheck(constraint)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to parse version string")
 	})
@@ -502,11 +499,10 @@ func TestAbi(t *testing.T) {
 				_ = closeLibrary(libh)
 			}
 		})
-		constraint, err := semver.NewConstraint(AbiCompatibilityConstraint)
-		require.NoError(t, err)
 		mockt := &Tokenizer{}
 		purego.RegisterLibFunc(&mockt.getVersion, libh, "get_version")
 		require.NotNil(t, mockt.getVersion, "getVersion function should not be nil")
+		constraint, _ := semver.NewConstraint(AbiCompatibilityConstraint)
 		err = mockt.abiCheck(constraint)
 		require.NoError(t, err)
 
