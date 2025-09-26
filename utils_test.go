@@ -100,7 +100,7 @@ func TestLoadTokenizerLibrary(t *testing.T) {
 	t.Run("Invalid path", func(t *testing.T) {
 		_, err := LoadTokenizerLibrary("invalid/path/to/libtokenizers.so")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "shared library does not exist at user-provided path")
+		require.Contains(t, err.Error(), "library file not found at user-provided path")
 	})
 
 	t.Run("Invalid library", func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestLoadTokenizerLibrary(t *testing.T) {
 		require.NoError(t, err)
 		_, err = LoadTokenizerLibrary(fakeLibPath)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to load library ")
+		require.Contains(t, err.Error(), "failed to load library from user-provided path")
 	})
 
 	t.Run("Invalid env var library path", func(t *testing.T) {
@@ -119,6 +119,6 @@ func TestLoadTokenizerLibrary(t *testing.T) {
 		t.Setenv("TOKENIZERS_LIB_PATH", "invalid")
 		_, err := LoadTokenizerLibrary("")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to load library ")
+		require.Contains(t, err.Error(), "library file not found at TOKENIZERS_LIB_PATH")
 	})
 }

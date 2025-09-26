@@ -37,16 +37,24 @@ jobs:
         version: latest
         args: --timeout=5m
 
-    # Download the latest Rust library release for testing
-    - name: Get latest Rust release (Linux)
+    # Download the compatible Rust library release for testing
+    - name: Get compatible Rust release (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
+        # Define the required ABI version - should match ABI_VERSION in src/lib.rs
+        REQUIRED_ABI="0.1.0"
+
+        # Find the latest compatible Rust release
         LATEST_RUST=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
         if [ -z "$LATEST_RUST" ]; then
           echo "ERROR: No Rust release found. Please create a Rust release first."
+          echo "Required ABI version: $REQUIRED_ABI"
           exit 1
         fi
+
         echo "Using Rust release: $LATEST_RUST"
+        echo "Required ABI version: $REQUIRED_ABI"
+
         gh release download $LATEST_RUST --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
         mkdir -p test-lib
         tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
@@ -54,21 +62,30 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
-    - name: Get latest Rust release (macOS)
+    - name: Get compatible Rust release (macOS)
       if: matrix.os == 'macos-latest'
       run: |
+        # Define the required ABI version - should match ABI_VERSION in src/lib.rs
+        REQUIRED_ABI="0.1.0"
+
         ARCH=$(uname -m)
         if [ "$ARCH" = "arm64" ]; then
           ARCH="aarch64"
         elif [ "$ARCH" = "x86_64" ]; then
           ARCH="x86_64"
         fi
+
+        # Find the latest compatible Rust release
         LATEST_RUST=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
         if [ -z "$LATEST_RUST" ]; then
           echo "ERROR: No Rust release found. Please create a Rust release first."
+          echo "Required ABI version: $REQUIRED_ABI"
           exit 1
         fi
+
         echo "Using Rust release: $LATEST_RUST"
+        echo "Required ABI version: $REQUIRED_ABI"
+
         gh release download $LATEST_RUST --pattern "libtokenizers-${ARCH}-apple-darwin.tar.gz"
         mkdir -p test-lib
         tar -xzf libtokenizers-${ARCH}-apple-darwin.tar.gz -C test-lib
@@ -76,17 +93,23 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
-    - name: Get latest Rust release (Windows)
+    - name: Get compatible Rust release (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
+        # Define the required ABI version - should match ABI_VERSION in src/lib.rs
+        $requiredABI = "0.1.0"
+
         $latestRust = gh release list --repo ${{ github.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
         if (-not $latestRust) {
           Write-Error "No Rust release found. Please create a Rust release first."
+          Write-Host "Required ABI version: $requiredABI"
           exit 1
         }
         $releaseTag = ($latestRust -split "`t")[0]
         Write-Host "Using Rust release: $releaseTag"
+        Write-Host "Required ABI version: $requiredABI"
+
         gh release download $releaseTag --pattern "libtokenizers-x86_64-pc-windows-msvc.tar.gz"
         New-Item -ItemType Directory -Force -Path test-lib
         tar -xzf libtokenizers-x86_64-pc-windows-msvc.tar.gz -C test-lib

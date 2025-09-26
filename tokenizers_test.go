@@ -470,11 +470,12 @@ func TestAbi(t *testing.T) {
 		constraint, err := semver.NewConstraint("v0.2.x")
 		require.NoError(t, err)
 		mockt := &Tokenizer{
-			getVersion: nil,
+			getVersion:    nil,
+			getAbiVersion: nil,
 		}
 		err = mockt.abiCheck(constraint)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "getVersion function is not initialized")
+		require.Contains(t, err.Error(), "neither getAbiVersion nor getVersion function is initialized")
 	})
 
 	t.Run("Invalid version", func(t *testing.T) {

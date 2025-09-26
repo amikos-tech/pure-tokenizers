@@ -508,3 +508,18 @@ pub extern "C" fn get_version() -> *const libc::c_char {
     };
     VERSION.as_ptr()
 }
+
+/// ABI version for FFI compatibility tracking
+/// This version should be updated when breaking changes are made to the FFI interface
+#[allow(dead_code)]
+const ABI_VERSION: &str = "0.1.0";
+
+/// Returns the ABI version string for compatibility checking
+/// This is separate from the library version to track FFI interface changes
+#[no_mangle]
+pub extern "C" fn get_abi_version() -> *const libc::c_char {
+    static ABI_VERSION_CSTR: &CStr = unsafe {
+        CStr::from_bytes_with_nul_unchecked(concat!("0.1.0", "\0").as_bytes())
+    };
+    ABI_VERSION_CSTR.as_ptr()
+}
