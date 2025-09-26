@@ -37,6 +37,9 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
 
+    - name: Install Rust toolchain (for fallback builds)
+      uses: dtolnay/rust-toolchain@stable
+
     - name: Run Go linting
       uses: golangci/golangci-lint-action@v6
       with:
@@ -44,14 +47,13 @@ jobs:
         args: --timeout=5m
 
     # Download pre-built Rust library for testing
-    # This assumes a recent Rust release is available
+    # Falls back to building locally if no rust-v* releases exist yet
     - name: Download latest Rust library (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
         LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
-          sudo apt-get update && sudo apt-get install -y cargo
           cargo build --release
           echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
         else
@@ -128,6 +130,9 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+
+    - name: Install Rust toolchain (for fallback builds)
+      uses: dtolnay/rust-toolchain@stable
 
     - name: Download latest Rust library
       run: |
