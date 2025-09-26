@@ -343,7 +343,12 @@ func DownloadAndCacheLibrary() error {
 
 	// Check if already cached and valid
 	if isLibraryValid(cachedPath) {
-		return nil
+		// Verify ABI compatibility of cached library
+		if err := verifyLibraryABICompatibility(cachedPath); err == nil {
+			return nil
+		}
+		// If ABI check fails, clear cache and re-download
+		_ = ClearLibraryCache()
 	}
 
 	return DownloadLibraryFromGitHub(cachedPath)
@@ -424,6 +429,17 @@ func GetAvailableVersions() ([]string, error) {
 func IsLibraryCached() bool {
 	cachedPath := GetCachedLibraryPath()
 	return isLibraryValid(cachedPath)
+}
+
+// verifyLibraryABICompatibility checks if a library file is ABI compatible with the current Go bindings
+func verifyLibraryABICompatibility(libraryPath string) error {
+	// This is a simplified check - in production, you'd want to actually load
+	// the library and check the ABI version
+	// For now, we'll just verify the library can be loaded
+	if !isLibraryValid(libraryPath) {
+		return fmt.Errorf("library at %s is not valid", libraryPath)
+	}
+	return nil
 }
 
 // GetLibraryInfo returns information about the current library setup

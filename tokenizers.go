@@ -27,6 +27,9 @@ const (
 	ErrInvalidOptions          = -14
 )
 
+// AbiCompatibilityConstraint defines the required version range for ABI compatibility.
+// The library version from Cargo.toml is used as the ABI version.
+// Update this constraint when making breaking changes to the FFI interface.
 const AbiCompatibilityConstraint = "^0.1.x"
 
 // result structs
@@ -225,7 +228,7 @@ type Tokenizer struct {
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
-	getVersion          func() string
+	getVersion func() string
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -325,16 +328,26 @@ func (t *Tokenizer) abiCheck(constraint *semver.Constraints) error {
 	if constraint == nil {
 		return errors.New("ABI version constraint cannot be nil")
 	}
+
+	// Get the library version for ABI compatibility checking
 	if t.getVersion == nil {
-		return errors.New("getVersion function is not initialized, cannot check ABI version")
+		return errors.New("getVersion function is not initialized, cannot check compatibility")
 	}
-	v := t.getVersion()
-	ver, err := semver.NewVersion(v)
+	versionStr := t.getVersion()
+
+	ver, err := semver.NewVersion(versionStr)
 	if err != nil {
-		return errors.Wrapf(err, "failed to parse version string: %s", v)
+		return errors.Wrapf(err, "failed to parse version string: %s", versionStr)
 	}
+
 	if !constraint.Check(ver) {
-		return errors.Errorf("tokenizer lib version %s is not compatible with supported version constraint %s", v, constraint.String())
+		// Enhanced error message with guidance
+		errMsg := errors.Errorf("tokenizer library ABI version %s is not compatible with required version constraint %s", versionStr, constraint.String())
+		return errors.Wrap(errMsg, `
+To resolve this issue:
+1. Set TOKENIZERS_LIB_PATH to a compatible library version
+2. Clear the library cache and re-download: rm -rf ~/.cache/tokenizers/lib
+3. Use a compatible library version by setting TOKENIZERS_VERSION environment variable`)
 	}
 	return nil
 }
