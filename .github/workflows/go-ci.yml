@@ -110,10 +110,20 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
-    - name: Run Go tests
+    - name: Run Go tests (Unix)
+      if: matrix.os != 'windows-latest'
       run: |
         go mod tidy
         go test -v -coverprofile=coverage.out -timeout=30m ./...
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Run Go tests (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        go mod tidy
+        go test -v -timeout=30m ./...
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
