@@ -14,12 +14,15 @@ The project uses separate release cycles for Rust and Go:
 - **Go releases**: Tagged with `vX.Y.Z` (e.g., `v0.1.0`)
 
 ### Creating Releases
-1. **Rust Library Release**:
+
+**Important**: For the first release or when no Rust releases exist, the Go release workflow will automatically build the Rust library locally as a fallback. However, it's recommended to create Rust releases first for better artifact management.
+
+1. **Rust Library Release** (recommended to do first):
    ```bash
    git tag rust-v0.1.0
    git push origin rust-v0.1.0
    ```
-   This triggers the `rust-release.yml` workflow which builds and releases library artifacts.
+   This triggers the `rust-release.yml` workflow which builds and releases library artifacts for all supported platforms.
 
 2. **Go Module Release**:
    ```bash
@@ -27,7 +30,8 @@ The project uses separate release cycles for Rust and Go:
    git push origin v0.1.0
    ```
    This triggers the `go-release.yml` workflow which creates a Go module release.
-   Note: Ensure a compatible Rust library release exists first.
+   - If Rust releases exist: Downloads and tests against the latest `rust-v*` release
+   - If no Rust releases exist: Builds the Rust library locally for testing (fallback)
 
 ### CI Workflows
 - **rust-ci.yml**: Runs on Rust code changes (src/**, Cargo.toml)
@@ -35,6 +39,13 @@ The project uses separate release cycles for Rust and Go:
 - **ci.yml**: Main integration tests running on all changes
 - **rust-release.yml**: Builds and releases Rust library artifacts
 - **go-release.yml**: Creates Go module releases
+
+### Troubleshooting Release Issues
+
+**Issue: First release or no Rust artifacts available**
+- The Go release workflow will automatically build the Rust library locally if no `rust-v*` releases are found
+- This prevents the circular dependency issue where Go releases need Rust artifacts that don't exist yet
+- Solution: Either create a Rust release first, or let the workflow build locally
 
 ## Build Commands
 
