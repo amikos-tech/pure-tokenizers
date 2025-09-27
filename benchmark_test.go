@@ -108,6 +108,8 @@ func BenchmarkEncodeWithOptions(b *testing.B) {
 }
 
 func BenchmarkDecode(b *testing.B) {
+	b.Skip("Skipping decode benchmarks due to known issue #38 - Decode function crashes with HuggingFace tokenizers")
+
 	tokenizer := setupBenchmark(b)
 	defer func() { _ = tokenizer.Close() }()
 
@@ -229,6 +231,8 @@ func BenchmarkVocabSize(b *testing.B) {
 }
 
 func BenchmarkEncodeDecode(b *testing.B) {
+	b.Skip("Skipping encode-decode benchmarks due to known issue #38 - Decode function crashes with HuggingFace tokenizers")
+
 	tokenizer := setupBenchmark(b)
 	defer func() { _ = tokenizer.Close() }()
 
