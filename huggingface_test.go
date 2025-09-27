@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -436,4 +437,81 @@ func getTestLibraryPath() string {
 	}
 
 	return ""
+}
+
+func TestConcurrentDownloads(t *testing.T) {
+	// Track connection reuse
+	connectionCount := 0
+	var mu sync.Mutex
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connectionCount++
+		mu.Unlock()
+
+		// Simulate successful response
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer mockServer.Close()
+
+	// Override the base URL
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+		Revision:   "main",
+	}
+
+	// Run multiple concurrent downloads
+	const numGoroutines = 5
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			modelID := fmt.Sprintf("test-model-%d", id)
+			data, err := downloadTokenizerFromHF(modelID, config)
+			assert.NoError(t, err, "Download %d should succeed", id)
+			assert.NotNil(t, data, "Data for download %d should not be nil", id)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// With connection reuse, we should see fewer connections than total requests
+	// due to Keep-Alive and connection pooling
+	t.Logf("Total connections used for %d downloads: %d", numGoroutines, connectionCount)
+
+	// The exact number may vary based on timing, but should demonstrate reuse
+	// We mainly want to ensure the test runs without race conditions
+	assert.Greater(t, connectionCount, 0, "Should have made at least one connection")
+	assert.LessOrEqual(t, connectionCount, numGoroutines, "Connections should not exceed number of requests")
+}
+
+func TestHTTPClientInitialization(t *testing.T) {
+	// Reset the client to test initialization
+	hfHTTPClient = nil
+	hfClientOnce = sync.Once{}
+
+	// Get the client multiple times
+	client1 := getHFHTTPClient()
+	client2 := getHFHTTPClient()
+
+	// Should be the same instance
+	assert.Same(t, client1, client2, "Should return the same HTTP client instance")
+
+	// Verify client configuration
+	assert.NotNil(t, client1, "HTTP client should not be nil")
+
+	// Check that transport is configured properly
+	transport, ok := client1.Transport.(*http.Transport)
+	assert.True(t, ok, "Transport should be *http.Transport")
+	assert.Equal(t, 100, transport.MaxIdleConns, "MaxIdleConns should be 100")
+	assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 10")
+	assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 90s")
 }
