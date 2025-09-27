@@ -20,6 +20,7 @@ on:
 permissions:
   contents: write
   deployments: write
+  pull-requests: write
 
 jobs:
   benchmark:
@@ -68,6 +69,7 @@ jobs:
         output-file-path: benchmark_output.txt
         github-token: ${{ secrets.GITHUB_TOKEN }}
         auto-push: false
+        skip-fetch-gh-pages: true
         alert-threshold: '120%'
         comment-on-alert: true
         fail-on-alert: false
