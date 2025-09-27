@@ -174,7 +174,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 
 		case "/rate-limited/resolve/main/tokenizer.json":
-			w.Header().Set("Retry-After", "60")
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 
 		default:
