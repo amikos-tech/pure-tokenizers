@@ -440,13 +440,13 @@ func getTestLibraryPath() string {
 }
 
 func TestConcurrentDownloads(t *testing.T) {
-	// Track connection reuse
-	connectionCount := 0
+	// Track requests to verify concurrent operation
+	requestCount := 0
 	var mu sync.Mutex
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		connectionCount++
+		requestCount++
 		mu.Unlock()
 
 		// Simulate successful response
@@ -470,12 +470,16 @@ func TestConcurrentDownloads(t *testing.T) {
 	const numGoroutines = 5
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
+	errors := make([]error, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
 			modelID := fmt.Sprintf("test-model-%d", id)
 			data, err := downloadTokenizerFromHF(modelID, config)
+			if err != nil {
+				errors[id] = err
+			}
 			assert.NoError(t, err, "Download %d should succeed", id)
 			assert.NotNil(t, data, "Data for download %d should not be nil", id)
 		}(i)
@@ -483,14 +487,17 @@ func TestConcurrentDownloads(t *testing.T) {
 
 	wg.Wait()
 
-	// With connection reuse, we should see fewer connections than total requests
-	// due to Keep-Alive and connection pooling
-	t.Logf("Total connections used for %d downloads: %d", numGoroutines, connectionCount)
+	// Verify all requests were handled
+	assert.Equal(t, numGoroutines, requestCount, "All requests should complete")
 
-	// The exact number may vary based on timing, but should demonstrate reuse
-	// We mainly want to ensure the test runs without race conditions
-	assert.Greater(t, connectionCount, 0, "Should have made at least one connection")
-	assert.LessOrEqual(t, connectionCount, numGoroutines, "Connections should not exceed number of requests")
+	// Verify no errors occurred during concurrent downloads
+	for i, err := range errors {
+		assert.NoError(t, err, "Concurrent download %d should not error", i)
+	}
+
+	// The shared client ensures thread-safe concurrent operation
+	// Connection pooling happens at transport level (not easily testable with httptest)
+	t.Logf("Successfully handled %d concurrent downloads", numGoroutines)
 }
 
 func TestHTTPClientInitialization(t *testing.T) {

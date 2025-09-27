@@ -54,9 +54,12 @@ func initHFHTTPClient() {
 				Timeout:   30 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   10,
+			ForceAttemptHTTP2:   true,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			// IdleConnTimeout: 90s is suitable for long-running processes that may
+			// have periods of inactivity between downloads. For short scripts that
+			// exit quickly, connections will be closed automatically on program exit.
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
