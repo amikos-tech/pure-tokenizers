@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,12 +15,25 @@ import (
 )
 
 var (
-	HFHubBaseURL     = "https://huggingface.co"
+	HFHubBaseURL      = "https://huggingface.co"
 	HFDefaultRevision = "main"
 	HFDefaultTimeout  = 30 * time.Second
 	HFMaxRetries      = 3
+	libraryVersion    = "0.1.0" // Default version, will be set from library if available
 	HFRetryDelay      = time.Second
 )
+
+// GetLibraryVersion returns the current library version used in User-Agent
+func GetLibraryVersion() string {
+	return libraryVersion
+}
+
+// SetLibraryVersion sets the library version for User-Agent headers
+func SetLibraryVersion(version string) {
+	if version != "" {
+		libraryVersion = version
+	}
+}
 
 // HFConfig holds HuggingFace-specific configuration
 type HFConfig struct {
@@ -152,6 +166,9 @@ func WithHFCacheDir(dir string) TokenizerOption {
 // WithHFTimeout sets the download timeout for HuggingFace requests
 func WithHFTimeout(timeout time.Duration) TokenizerOption {
 	return func(t *Tokenizer) error {
+		if timeout <= 0 {
+			return errors.New("timeout must be positive")
+		}
 		if t.hfConfig == nil {
 			t.hfConfig = &HFConfig{}
 		}
@@ -178,8 +195,11 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff
-			time.Sleep(HFRetryDelay * time.Duration(1<<uint(attempt-1)))
+			// Exponential backoff with jitter
+			baseDelay := HFRetryDelay * time.Duration(1<<uint(attempt-1))
+			// Add 0-25% jitter to prevent thundering herd
+			jitter := time.Duration(rand.Float64() * 0.25 * float64(baseDelay))
+			time.Sleep(baseDelay + jitter)
 		}
 
 		data, err := downloadWithRetry(url, config)
@@ -210,7 +230,7 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 	}
 
 	// Set headers
-	req.Header.Set("User-Agent", "pure-tokenizers/0.1.0") // Version from Cargo.toml
+	req.Header.Set("User-Agent", fmt.Sprintf("pure-tokenizers/%s", GetLibraryVersion()))
 	if config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+config.Token)
 	}
@@ -260,6 +280,16 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 
 // validateModelID checks if the model ID is valid
 func validateModelID(modelID string) error {
+	// Empty model ID is handled separately in FromHuggingFace
+	if modelID == "" {
+		return nil
+	}
+
+	// Check length limit
+	if len(modelID) > 256 {
+		return errors.New("model ID cannot exceed 256 characters")
+	}
+
 	// Basic validation - can be enhanced
 	if strings.Contains(modelID, "..") {
 		return errors.New("model ID cannot contain '..'")
@@ -267,6 +297,21 @@ func validateModelID(modelID string) error {
 	if strings.HasPrefix(modelID, "/") || strings.HasSuffix(modelID, "/") {
 		return errors.New("model ID cannot start or end with '/'")
 	}
+
+	// Validate organization/model format
+	parts := strings.Split(modelID, "/")
+	if len(parts) > 2 {
+		return errors.New("model ID should be in format 'organization/model' or just 'model'")
+	}
+	for _, part := range parts {
+		if part == "" {
+			return errors.New("model ID parts cannot be empty")
+		}
+		if len(part) > 128 {
+			return errors.New("each part of model ID cannot exceed 128 characters")
+		}
+	}
+
 	// Check for valid characters (alphanumeric, dash, underscore, slash)
 	for _, char := range modelID {
 		if !isValidModelIDChar(char) {

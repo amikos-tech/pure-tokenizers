@@ -228,7 +228,7 @@ type Tokenizer struct {
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
-	getVersion func() string
+	getVersion          func() string
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -335,6 +335,9 @@ func (t *Tokenizer) abiCheck(constraint *semver.Constraints) error {
 		return errors.New("getVersion function is not initialized, cannot check compatibility")
 	}
 	versionStr := t.getVersion()
+
+	// Update global library version for HuggingFace User-Agent
+	SetLibraryVersion(versionStr)
 
 	ver, err := semver.NewVersion(versionStr)
 	if err != nil {
@@ -481,4 +484,12 @@ func getErrorForCode(errCode int32) error {
 	default:
 		return errors.Errorf("unknown error code: %d", errCode)
 	}
+}
+
+// GetLibraryVersion returns the version of the tokenizer library
+func (t *Tokenizer) GetLibraryVersion() string {
+	if t.getVersion == nil {
+		return "unknown"
+	}
+	return t.getVersion()
 }
