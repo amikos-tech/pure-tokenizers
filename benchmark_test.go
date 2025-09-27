@@ -27,7 +27,7 @@ func setupBenchmark(b *testing.B) *Tokenizer {
 	if _, err := os.Stat(testFilePath); err == nil {
 		tokenizer, err := FromFile(testFilePath)
 		if err != nil {
-			b.Skipf("Failed to load tokenizer from test file: %v", err)
+			b.Fatalf("Failed to load tokenizer from test file: %v", err)
 		}
 		return tokenizer
 	}
@@ -35,14 +35,14 @@ func setupBenchmark(b *testing.B) *Tokenizer {
 	cachedPath := GetCachedLibraryPath()
 	if _, err := os.Stat(cachedPath); err != nil {
 		if err := DownloadLibraryFromGitHub(cachedPath); err != nil {
-			b.Skipf("Failed to download library: %v", err)
+			b.Fatalf("Failed to download library: %v", err)
 		}
 	}
 
 	modelID := "bert-base-uncased"
 	tokenizer, err := FromHuggingFace(modelID)
 	if err != nil {
-		b.Skipf("Failed to create tokenizer from HuggingFace: %v", err)
+		b.Fatalf("Failed to create tokenizer from HuggingFace: %v", err)
 	}
 
 	return tokenizer
