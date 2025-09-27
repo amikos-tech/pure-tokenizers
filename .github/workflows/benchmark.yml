@@ -136,9 +136,10 @@ jobs:
 
     - name: Run benchmarks on base branch
       working-directory: base
+      continue-on-error: true
       run: |
         export TOKENIZERS_LIB_PATH="${{ github.workspace }}/base/target/release/libtokenizers.so"
-        go test -bench=. -benchmem -count=5 ./... > ../base_bench.txt
+        go test -bench=. -benchmem -count=5 ./... > ../base_bench.txt || echo "No benchmarks found in base branch" > ../base_bench.txt
 
     - name: Compare benchmarks
       run: |
