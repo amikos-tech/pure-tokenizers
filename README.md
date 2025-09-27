@@ -226,6 +226,41 @@ make lint-fix      # Go linting
 make lint-rust     # Rust linting
 ```
 
+### Testing
+
+#### Unit Tests
+```bash
+# Run all unit tests
+make test
+
+# Run with specific library path
+make test-lib-path
+```
+
+#### Integration Tests
+Integration tests verify real-world functionality with HuggingFace models:
+
+```bash
+# Setup for local testing
+cp .env.example .env
+# Edit .env and add your HF_TOKEN (get from https://huggingface.co/settings/tokens)
+
+# Run all integration tests (requires HF_TOKEN for private models)
+make test-integration
+
+# Run only HuggingFace integration tests
+make test-integration-hf
+```
+
+The integration tests cover:
+- Public model downloads (BERT, GPT2, DistilBERT)
+- Private model access (with HF_TOKEN)
+- Caching behavior verification
+- Rate limiting handling
+- Offline mode functionality
+
+Note: Integration tests are automatically run in CI for the main branch and PRs with the `integration` label.
+
 ### Project Structure
 
 ```

@@ -168,3 +168,46 @@ jobs:
     - name: Test library loading
       run: |
         go test -v -run "TestGetCachedLibraryPath|TestCacheDirectory"
+
+  huggingface-integration:
+    name: HuggingFace Integration Tests
+    runs-on: ubuntu-latest
+    needs: go-test
+    # Only run on main branch or when PR has 'integration' label
+    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'integration')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Rust toolchain (for fallback builds)
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Download latest Rust library
+      run: |
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+        fi
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Run HuggingFace integration tests
+      run: |
+        go test -v -tags=integration -run "TestHFIntegration" -timeout=60m
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        GITHUB_TOKEN: ${{ github.token }}
