@@ -68,8 +68,7 @@ jobs:
         tool: 'go'
         output-file-path: benchmark_output.txt
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        auto-push: false
-        skip-fetch-gh-pages: true
+        auto-push: true
         alert-threshold: '120%'
         comment-on-alert: true
         fail-on-alert: false
