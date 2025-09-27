@@ -66,6 +66,32 @@ test-download: build
 	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
 	go test -v -run "TestDownloadFunctionality|TestGetLibraryInfo"
 
+# Benchmark targets
+.PHONY: benchstat-bin
+benchstat-bin:
+	go install golang.org/x/perf/cmd/benchstat@latest
+
+.PHONY: bench
+bench: build
+	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
+	go test -bench=. -benchmem -benchtime=10s -count=5 ./...
+
+.PHONY: bench-save
+bench-save: build
+	@mkdir -p benchmarks
+	@TIMESTAMP=$$(date +%Y%m%d_%H%M%S); \
+	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
+	go test -bench=. -benchmem -benchtime=10s -count=5 ./... | tee benchmarks/bench_$$TIMESTAMP.txt; \
+	echo "Benchmark results saved to benchmarks/bench_$$TIMESTAMP.txt"
+
+.PHONY: bench-compare
+bench-compare: benchstat-bin
+	@if [ -z "$(OLD)" ] || [ -z "$(NEW)" ]; then \
+		echo "Usage: make bench-compare OLD=benchmarks/old.txt NEW=benchmarks/new.txt"; \
+		exit 1; \
+	fi
+	benchstat $(OLD) $(NEW)
+
 # Integration test targets
 .PHONY: test-integration
 test-integration: gotestsum-bin build
@@ -144,6 +170,7 @@ dev-setup:
 	rustup component add rustfmt clippy
 	go install gotest.tools/gotestsum@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install golang.org/x/perf/cmd/benchstat@latest
 
 .PHONY: check-env
 check-env:
