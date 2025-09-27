@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a CGo-free tokenizers library that provides Go bindings for Rust-based tokenizers using purego for FFI. The project creates platform-specific shared libraries (.so/.dylib/.dll) from Rust code and loads them dynamically in Go without requiring CGo.
 
+### Key Features
+- **HuggingFace Hub Integration**: Direct loading of tokenizers from any HuggingFace model
+- **Automatic caching**: Both library binaries and HuggingFace tokenizers are cached locally
+- **Cross-platform support**: Works on Windows, macOS, and Linux (including ARM)
+
 ## Release Process
 
 ### Separate Release Cycles
@@ -121,6 +126,13 @@ The project uses a single version from `Cargo.toml` for both the library and ABI
 - Truncation and padding support
 - ABI version compatibility checking
 
+**HuggingFace Integration (huggingface.go)**
+- Direct loading from HuggingFace model repository
+- Authentication support for private/gated models
+- Smart caching with offline mode support
+- Retry logic with exponential backoff
+- Model ID validation (owner/repo_name format, max 96 chars per component)
+
 **FFI Bridge (library.go, library_windows.go)**
 - Platform-specific library loading using purego
 - No CGo dependencies - pure Go implementation
@@ -143,9 +155,16 @@ The library detects and handles:
 - **Windows**: x86_64 → .dll files
 
 ### Cache Locations
+
+#### Library Cache
 - **macOS**: `~/Library/Caches/tokenizers/lib/`
 - **Linux**: `~/.cache/tokenizers/lib/` or `$XDG_CACHE_HOME/tokenizers/lib/`
 - **Windows**: `%APPDATA%/tokenizers/lib/`
+
+#### HuggingFace Cache
+- **macOS**: `~/Library/Caches/tokenizers/huggingface/models/`
+- **Linux**: `~/.cache/tokenizers/huggingface/models/` or `$XDG_CACHE_HOME/tokenizers/huggingface/models/`
+- **Windows**: `%APPDATA%/tokenizers/huggingface/models/`
 
 ## Environment Variables
 
@@ -153,6 +172,8 @@ The library detects and handles:
 - `TOKENIZERS_GITHUB_REPO`: Custom GitHub repository (default: `amikos-tech/pure-tokenizers`)
 - `TOKENIZERS_VERSION`: Specific version to download (default: `latest`)
 - `GITHUB_TOKEN` or `GH_TOKEN`: GitHub authentication for API requests
+- `HF_TOKEN`: HuggingFace authentication token for private/gated models
+- `HF_HUB_CACHE`: Override HuggingFace cache directory
 
 ## Error Handling
 

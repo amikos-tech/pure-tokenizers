@@ -14,13 +14,16 @@ import (
 	"github.com/pkg/errors"
 )
 
-var (
-	HFHubBaseURL      = "https://huggingface.co"
+const (
 	HFDefaultRevision = "main"
 	HFDefaultTimeout  = 30 * time.Second
 	HFMaxRetries      = 3
-	libraryVersion    = "0.1.0" // Default version, will be set from library if available
 	HFRetryDelay      = time.Second
+)
+
+var (
+	HFHubBaseURL   = "https://huggingface.co" // Variable to allow testing with mock server
+	libraryVersion = "0.1.0"                  // Default version, will be set from library if available
 )
 
 // GetLibraryVersion returns the current library version used in User-Agent
@@ -285,48 +288,57 @@ func validateModelID(modelID string) error {
 		return nil
 	}
 
-	// Check length limit
-	if len(modelID) > 256 {
-		return errors.New("model ID cannot exceed 256 characters")
-	}
-
-	// Basic validation - can be enhanced
-	if strings.Contains(modelID, "..") {
-		return errors.New("model ID cannot contain '..'")
-	}
-	if strings.HasPrefix(modelID, "/") || strings.HasSuffix(modelID, "/") {
-		return errors.New("model ID cannot start or end with '/'")
-	}
-
-	// Validate organization/model format
+	// Validate format: must be either "repo_name" or "owner/repo_name"
 	parts := strings.Split(modelID, "/")
 	if len(parts) > 2 {
-		return errors.New("model ID should be in format 'organization/model' or just 'model'")
+		return errors.New("model ID must be in format 'owner/repo_name' or just 'repo_name'")
 	}
-	for _, part := range parts {
-		if part == "" {
-			return errors.New("model ID parts cannot be empty")
+
+	// If format is owner/repo_name, validate owner
+	if len(parts) == 2 {
+		owner := parts[0]
+		if owner == "" {
+			return errors.New("owner cannot be empty")
 		}
-		if len(part) > 128 {
-			return errors.New("each part of model ID cannot exceed 128 characters")
+		// Owner follows same rules as repo_name
+		if len(owner) > 96 {
+			return errors.New("owner cannot exceed 96 characters")
+		}
+		if !isValidRepoName(owner) {
+			return errors.New("owner contains invalid characters (must match [\\w\\-.]{1,96})")
 		}
 	}
 
-	// Check for valid characters (alphanumeric, dash, underscore, slash)
-	for _, char := range modelID {
-		if !isValidModelIDChar(char) {
-			return errors.Errorf("invalid character in model ID: %c", char)
-		}
+	// Validate repo_name (last part)
+	repoName := parts[len(parts)-1]
+	if repoName == "" {
+		return errors.New("repo_name cannot be empty")
 	}
+	if len(repoName) > 96 {
+		return errors.Errorf("repo_name cannot exceed 96 characters (got %d)", len(repoName))
+	}
+	if !isValidRepoName(repoName) {
+		return errors.New("repo_name contains invalid characters (must match [\\w\\-.]{1,96})")
+	}
+
 	return nil
 }
 
-// isValidModelIDChar checks if a character is valid in a model ID
-func isValidModelIDChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') ||
-		c == '-' || c == '_' || c == '/' || c == '.'
+// isValidRepoName checks if a repo/owner name matches HuggingFace's pattern [\w\-.]{1,96}
+func isValidRepoName(name string) bool {
+	if len(name) == 0 || len(name) > 96 {
+		return false
+	}
+	for _, c := range name {
+		// \w matches [a-zA-Z0-9_], plus we allow - and .
+		if !((c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '_' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // getHFCachePath returns the cache path for a HuggingFace tokenizer

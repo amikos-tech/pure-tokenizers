@@ -282,6 +282,119 @@ func TestHFIntegrationCacheManagement(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestHFIntegrationNegativeCases(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	tempDir := t.TempDir()
+
+	testCases := []struct {
+		name        string
+		modelID     string
+		expectError string
+	}{
+		{
+			name:        "Non-existent model",
+			modelID:     "this-model-definitely-does-not-exist-123456789",
+			expectError: "", // Could be "not found" or "authentication" depending on HF API behavior
+		},
+		{
+			name:        "Invalid model ID with spaces",
+			modelID:     "invalid model name",
+			expectError: "invalid character",
+		},
+		{
+			name:        "Model ID too long",
+			modelID:     strings.Repeat("a", 97),
+			expectError: "cannot exceed 96 characters",
+		},
+		{
+			name:        "Invalid characters in model ID",
+			modelID:     "model@invalid#chars",
+			expectError: "invalid character",
+		},
+		{
+			name:        "Too many slashes",
+			modelID:     "org/suborg/model",
+			expectError: "must be in format",
+		},
+		{
+			name:        "Empty organization",
+			modelID:     "/model",
+			expectError: "owner cannot be empty",
+		},
+		{
+			name:        "Empty model name",
+			modelID:     "org/",
+			expectError: "repo_name cannot be empty",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tok, err := FromHuggingFace(tc.modelID,
+				WithHFCacheDir(tempDir),
+				WithHFTimeout(10*time.Second),
+			)
+
+			assert.Error(t, err, "Expected error for %s", tc.modelID)
+
+			// Only check error message if we have a specific expectation
+			if tc.expectError != "" {
+				assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tc.expectError),
+					"Error should contain expected message for %s", tc.modelID)
+			} else if tc.name == "Non-existent model" {
+				// For non-existent models, we expect either "not found" or authentication error
+				errStr := strings.ToLower(err.Error())
+				assert.True(t,
+					strings.Contains(errStr, "not found") ||
+					strings.Contains(errStr, "404") ||
+					strings.Contains(errStr, "authentication") ||
+					strings.Contains(errStr, "401"),
+					"Error should indicate model not found or authentication required, got: %v", err)
+			}
+
+			if tok != nil {
+				_ = tok.Close()
+				t.Errorf("Expected nil tokenizer for invalid model %s", tc.modelID)
+			}
+		})
+	}
+}
+
+func TestHFIntegrationInvalidToken(t *testing.T) {
+	skipIfNoLibrary(t)
+
+	privateModel := os.Getenv("HF_PRIVATE_MODEL")
+	if privateModel == "" {
+		// Use a known private/gated model for testing
+		privateModel = "meta-llama/Llama-2-7b-hf"
+	}
+
+	tempDir := t.TempDir()
+
+	// Test with invalid token
+	tok, err := FromHuggingFace(privateModel,
+		WithHFToken("invalid-token-12345"),
+		WithHFCacheDir(tempDir),
+		WithHFTimeout(10*time.Second),
+	)
+
+	assert.Error(t, err, "Should fail with invalid token")
+	if tok != nil {
+		_ = tok.Close()
+	}
+
+	// Error should indicate authentication failure
+	errStr := strings.ToLower(err.Error())
+	assert.True(t,
+		strings.Contains(errStr, "authentication") ||
+		strings.Contains(errStr, "forbidden") ||
+		strings.Contains(errStr, "unauthorized") ||
+		strings.Contains(errStr, "401") ||
+		strings.Contains(errStr, "403"),
+		"Error should indicate authentication failure, got: %v", err)
+}
+
 func isAuthenticationError(err error) bool {
 	if err == nil {
 		return false

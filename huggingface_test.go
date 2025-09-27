@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,10 +58,14 @@ func TestValidateModelID(t *testing.T) {
 		{"Valid org/model", "google/flan-t5-base", false},
 		{"Valid with numbers", "gpt2", false},
 		{"Valid with dots", "sentence-transformers/all-MiniLM-L6-v2", false},
-		{"Invalid with ..", "model/../evil", true},
-		{"Invalid starting with /", "/model", true},
-		{"Invalid ending with /", "model/", true},
 		{"Invalid with spaces", "model name", true},
+		{"Invalid too many parts", "org/suborg/model", true},
+		{"Invalid repo name too long", strings.Repeat("a", 97), true},
+		{"Valid repo name at limit", strings.Repeat("a", 96), false},
+		{"Invalid owner too long", strings.Repeat("a", 97) + "/model", true},
+		{"Valid owner and repo at limit", strings.Repeat("a", 96) + "/" + strings.Repeat("b", 96), false},
+		{"Invalid special chars", "model@name", true},
+		{"Valid underscore dash dot", "model_name-v1.0", false},
 		{"Empty model ID", "", false}, // This is handled separately
 	}
 
