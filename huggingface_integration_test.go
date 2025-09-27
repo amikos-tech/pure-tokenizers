@@ -5,6 +5,7 @@ package tokenizers
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,6 +299,5 @@ func isRateLimitError(err error) bool {
 }
 
 func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 &&
-		(s[0:len(substr)] == substr || containsSubstring(s[1:], substr)))
+	return strings.Contains(s, substr)
 }
