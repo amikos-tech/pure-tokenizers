@@ -23,6 +23,9 @@ const (
 	HFDefaultTimeout  = 30 * time.Second
 	HFMaxRetries      = 3
 	HFRetryDelay      = time.Second
+	// HFMaxRetryAfterDelay caps the maximum delay from Retry-After headers
+	// to prevent excessive waits from misconfigured or malicious servers
+	HFMaxRetryAfterDelay = 5 * time.Minute
 )
 
 var (
@@ -282,7 +285,9 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	return nil, lastErr
 }
 
-// downloadWithRetryAndResponse performs a single download attempt and returns the response
+// downloadWithRetryAndResponse performs a single download attempt and returns the response.
+// Unlike a simple download function, this returns the HTTP response alongside the data
+// to allow the caller to inspect response headers (e.g., Retry-After header for rate limiting).
 func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.Response, error) {
 	// Create a context with timeout for this specific request
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
@@ -510,25 +515,31 @@ func ClearHFCache() error {
 	return os.RemoveAll(modelsDir)
 }
 
-// parseRetryAfter parses the Retry-After header value
-// It can be either a delay in seconds or an HTTP date
+// parseRetryAfter parses the Retry-After header value.
+// It can be either a delay in seconds or an HTTP date.
+// The returned duration is capped at HFMaxRetryAfterDelay to prevent excessive waits.
 func parseRetryAfter(value string) time.Duration {
+	var duration time.Duration
+
 	// First, try to parse as seconds
 	if seconds, err := strconv.Atoi(value); err == nil {
-		return time.Duration(seconds) * time.Second
-	}
-
-	// Try to parse as HTTP date (RFC1123)
-	if t, err := http.ParseTime(value); err == nil {
+		duration = time.Duration(seconds) * time.Second
+	} else if t, err := http.ParseTime(value); err == nil {
+		// Try to parse as HTTP date (RFC1123)
 		// Calculate duration from now
-		duration := time.Until(t)
+		duration = time.Until(t)
 		if duration < 0 {
 			// If the time is in the past, don't wait
 			return 0
 		}
-		return duration
+	} else {
+		// If we can't parse it, return 0 (fallback to exponential backoff)
+		return 0
 	}
 
-	// If we can't parse it, return 0 (fallback to exponential backoff)
-	return 0
+	// Cap the delay to prevent excessive waits
+	if duration > HFMaxRetryAfterDelay {
+		return HFMaxRetryAfterDelay
+	}
+	return duration
 }

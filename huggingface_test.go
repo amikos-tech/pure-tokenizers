@@ -630,6 +630,30 @@ func TestParseRetryAfter(t *testing.T) {
 			expectedMin: 0,
 			expectedMax: 0,
 		},
+		{
+			name:        "Excessive seconds value - should be capped",
+			value:       "3600", // 1 hour
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name: "Excessive HTTP date - should be capped",
+			value:       time.Now().Add(10 * time.Hour).UTC().Format(http.TimeFormat),
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name:        "Value exactly at cap",
+			value:       "300", // 5 minutes
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name:        "Value just under cap",
+			value:       "299", // Just under 5 minutes
+			expectedMin: 299 * time.Second,
+			expectedMax: 299 * time.Second,
+		},
 	}
 
 	for _, tc := range testCases {
