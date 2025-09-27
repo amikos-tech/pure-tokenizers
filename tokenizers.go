@@ -236,6 +236,7 @@ type Tokenizer struct {
 	TruncationMaxLength uintptr // Maximum length for truncation
 	PaddingEnabled      bool
 	PaddingStrategy     PaddingStrategy // Strategy for padding
+	hfConfig            *HFConfig     // HuggingFace configuration
 
 }
 
