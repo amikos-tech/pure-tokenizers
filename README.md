@@ -5,25 +5,17 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/amikos-tech/pure-tokenizers)](https://github.com/amikos-tech/pure-tokenizers/releases)
 
-CGo-free tokenizers for Go with automatic library management.
+CGo-free tokenizers for Go with automatic library management and HuggingFace Hub integration.
 
 - ✅ **No CGo required** - Pure Go implementation using purego FFI
+- ✅ **HuggingFace Hub integration** - Load tokenizers directly from HuggingFace models
 - ✅ **Automatic downloads** - Platform-specific libraries fetched on demand
 - ✅ **Cross-platform** - Windows, macOS, Linux (including ARM)
 - ✅ **Production ready** - Checksum verification and ABI compatibility checks
 
 ## Quick Start
 
-First, get a tokenizer configuration file:
-
-```bash
-# Download a tokenizer from Hugging Face
-curl -o tokenizer.json https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
-
-# Or use the example tokenizer.json included in this repository
-```
-
-Then use it in your Go code:
+### Load directly from HuggingFace Hub
 
 ```go
 package main
@@ -36,8 +28,8 @@ import (
 )
 
 func main() {
-    // Load tokenizer from file
-    tokenizer, err := tokenizers.FromFile("tokenizer.json")
+    // Load tokenizer directly from HuggingFace model
+    tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased")
     if err != nil {
         log.Fatal(err)
     }
@@ -52,6 +44,17 @@ func main() {
     fmt.Println("Tokens:", encoding.Tokens)
     fmt.Println("Token IDs:", encoding.IDs)
 }
+```
+
+### Or load from a local file
+
+```go
+// Load tokenizer from file
+tokenizer, err := tokenizers.FromFile("tokenizer.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer tokenizer.Close()
 ```
 
 That's it! The library automatically downloads the correct binary for your platform on first use.
@@ -82,6 +85,32 @@ Optimized binaries for each platform and architecture:
 Native Rust performance without CGo overhead. Direct FFI calls using purego.
 
 ## Usage Examples
+
+### HuggingFace Hub Integration
+
+```go
+// Load tokenizer from any public HuggingFace model
+tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased")
+tokenizer, err := tokenizers.FromHuggingFace("gpt2")
+tokenizer, err := tokenizers.FromHuggingFace("sentence-transformers/all-MiniLM-L6-v2")
+
+// Load from private/gated models with authentication
+tokenizer, err := tokenizers.FromHuggingFace("meta-llama/Llama-2-7b-hf",
+    tokenizers.WithHFToken(os.Getenv("HF_TOKEN")))
+
+// Configure HuggingFace options
+tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
+    tokenizers.WithHFToken(token),           // Authentication token
+    tokenizers.WithHFRevision("main"),       // Specific revision/branch
+    tokenizers.WithHFCacheDir("/custom/cache"), // Custom cache directory
+    tokenizers.WithHFTimeout(30*time.Second),   // Download timeout
+    tokenizers.WithHFOfflineMode(true),      // Use cached version only
+)
+
+// The tokenizer is automatically cached for offline use
+// Cache location: ~/.cache/tokenizers/huggingface/ (Linux/macOS)
+//                 %APPDATA%/tokenizers/huggingface/ (Windows)
+```
 
 ### Basic Tokenization
 
@@ -180,15 +209,33 @@ tokenizer, err := tokenizers.FromFile("tokenizer.json",
 
 ### Cache Management
 
+#### Library Cache
 ```go
-// Get the cache directory
+// Get the library cache directory
 cachePath := tokenizers.GetCachedLibraryPath()
 
-// Clear the cache
+// Clear the library cache
 err := tokenizers.ClearLibraryCache()
 
 // Download and cache a specific version
 err := tokenizers.DownloadAndCacheLibraryWithVersion("v0.1.0")
+```
+
+#### HuggingFace Cache
+```go
+// Get HuggingFace cache information
+info, err := tokenizers.GetHFCacheInfo("bert-base-uncased")
+
+// Clear cache for a specific model
+err := tokenizers.ClearHFModelCache("bert-base-uncased")
+
+// Clear entire HuggingFace cache
+err := tokenizers.ClearHFCache()
+
+// Cache locations by platform:
+// Linux:   ~/.cache/tokenizers/huggingface/models/
+// macOS:   ~/Library/Caches/tokenizers/huggingface/models/
+// Windows: %APPDATA%/tokenizers/huggingface/models/
 ```
 
 ## Platform Support
@@ -225,6 +272,41 @@ make test
 make lint-fix      # Go linting
 make lint-rust     # Rust linting
 ```
+
+### Testing
+
+#### Unit Tests
+```bash
+# Run all unit tests
+make test
+
+# Run with specific library path
+make test-lib-path
+```
+
+#### Integration Tests
+Integration tests verify real-world functionality with HuggingFace models:
+
+```bash
+# Setup for local testing
+cp .env.example .env
+# Edit .env and add your HF_TOKEN (get from https://huggingface.co/settings/tokens)
+
+# Run all integration tests (requires HF_TOKEN for private models)
+make test-integration
+
+# Run only HuggingFace integration tests
+make test-integration-hf
+```
+
+The integration tests cover:
+- Public model downloads (BERT, GPT2, DistilBERT)
+- Private model access (with HF_TOKEN)
+- Caching behavior verification
+- Rate limiting handling
+- Offline mode functionality
+
+Note: Integration tests are automatically run in CI for the main branch and PRs with the `integration` label.
 
 ### Project Structure
 

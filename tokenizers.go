@@ -228,7 +228,7 @@ type Tokenizer struct {
 	freeString          func(ptr *string)
 	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
-	getVersion func() string
+	getVersion          func() string
 	defaultEncodingOpts EncodeOptions
 	TruncationEnabled   bool
 	TruncationDirection TruncationDirection
@@ -236,6 +236,7 @@ type Tokenizer struct {
 	TruncationMaxLength uintptr // Maximum length for truncation
 	PaddingEnabled      bool
 	PaddingStrategy     PaddingStrategy // Strategy for padding
+	hfConfig            *HFConfig     // HuggingFace configuration
 
 }
 
@@ -288,6 +289,11 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.vocabSize, tokenizer.libh, "vocab_size")
 	purego.RegisterLibFunc(&tokenizer.getVersion, tokenizer.libh, "get_version")
 
+	// Initialize library version for HuggingFace User-Agent
+	if tokenizer.getVersion != nil {
+		SetLibraryVersion(tokenizer.getVersion())
+	}
+
 	tOpts := &TokenizerOptions{}
 	if tokenizer.TruncationEnabled {
 		tOpts = &TokenizerOptions{
@@ -334,6 +340,9 @@ func (t *Tokenizer) abiCheck(constraint *semver.Constraints) error {
 		return errors.New("getVersion function is not initialized, cannot check compatibility")
 	}
 	versionStr := t.getVersion()
+
+	// Update global library version for HuggingFace User-Agent
+	SetLibraryVersion(versionStr)
 
 	ver, err := semver.NewVersion(versionStr)
 	if err != nil {
@@ -480,4 +489,12 @@ func getErrorForCode(errCode int32) error {
 	default:
 		return errors.Errorf("unknown error code: %d", errCode)
 	}
+}
+
+// GetLibraryVersion returns the version of the tokenizer library
+func (t *Tokenizer) GetLibraryVersion() string {
+	if t.getVersion == nil {
+		return "unknown"
+	}
+	return t.getVersion()
 }

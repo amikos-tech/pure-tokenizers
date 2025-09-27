@@ -66,6 +66,33 @@ test-download: build
 	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
 	go test -v -run "TestDownloadFunctionality|TestGetLibraryInfo"
 
+# Integration test targets
+.PHONY: test-integration
+test-integration: gotestsum-bin build
+	@if [ -f .env ]; then \
+		export $$(cat .env | grep -v '^#' | xargs); \
+	fi; \
+	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
+	gotestsum \
+		--format short-verbose \
+		--packages="./..." \
+		--junitfile integration.xml \
+		-- \
+		-v \
+		-tags=integration \
+		-timeout=60m
+
+.PHONY: test-integration-hf
+test-integration-hf: gotestsum-bin build
+	@if [ -f .env ]; then \
+		export $$(cat .env | grep -v '^#' | xargs); \
+	fi; \
+	if [ -z "$$HF_TOKEN" ]; then \
+		echo "Warning: HF_TOKEN not set. Only public model tests will run."; \
+	fi; \
+	TOKENIZERS_LIB_PATH="$(shell pwd)/target/release/libtokenizers$(shell if [ "$(shell uname)" = "Darwin" ]; then echo ".dylib"; elif [ "$(shell uname)" = "Linux" ]; then echo ".so"; else echo ".dll"; fi)" \
+	go test -v -tags=integration -run "TestHFIntegration" -timeout=60m
+
 # Lint targets
 .PHONY: lint-fix
 lint-fix:
