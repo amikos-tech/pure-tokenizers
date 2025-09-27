@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -237,21 +238,40 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, config.Revision)
 
 	var lastErr error
+	var retryAfterDuration time.Duration
 	for attempt := 0; attempt < config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff with jitter
-			baseDelay := HFRetryDelay * time.Duration(1<<uint(attempt-1))
-			// Add 0-25% jitter to prevent thundering herd
-			jitter := time.Duration(rand.Float64() * 0.25 * float64(baseDelay))
-			time.Sleep(baseDelay + jitter)
+			var delay time.Duration
+
+			// Use server-suggested delay if available
+			if retryAfterDuration > 0 {
+				delay = retryAfterDuration
+				// Reset for next iteration
+				retryAfterDuration = 0
+			} else {
+				// Exponential backoff with jitter
+				baseDelay := HFRetryDelay * time.Duration(1<<uint(attempt-1))
+				// Add 0-25% jitter to prevent thundering herd
+				jitter := time.Duration(rand.Float64() * 0.25 * float64(baseDelay))
+				delay = baseDelay + jitter
+			}
+
+			time.Sleep(delay)
 		}
 
-		data, err := downloadWithRetry(url, config)
+		data, resp, err := downloadWithRetryAndResponse(url, config)
 		if err == nil {
 			return data, nil
 		}
 
 		lastErr = err
+
+		// Parse Retry-After header if present
+		if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				retryAfterDuration = parseRetryAfter(retryAfter)
+			}
+		}
 
 		// Don't retry on certain errors
 		if isNonRetryableError(err) {
@@ -262,15 +282,15 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	return nil, lastErr
 }
 
-// downloadWithRetry performs a single download attempt
-func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
+// downloadWithRetryAndResponse performs a single download attempt and returns the response
+func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.Response, error) {
 	// Create a context with timeout for this specific request
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create request")
+		return nil, nil, errors.Wrap(err, "failed to create request")
 	}
 
 	// Set headers
@@ -283,7 +303,7 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 	client := getHFHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, errors.Wrap(err, "request failed")
+		return nil, nil, errors.Wrap(err, "request failed")
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -294,34 +314,31 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 	case http.StatusOK:
 		// Success
 	case http.StatusUnauthorized:
-		return nil, errors.New("authentication required: please set HF_TOKEN environment variable or use WithHFToken()")
+		return nil, resp, errors.New("authentication required: please set HF_TOKEN environment variable or use WithHFToken()")
 	case http.StatusForbidden:
-		return nil, errors.New("access forbidden: token may be invalid or model may be gated")
+		return nil, resp, errors.New("access forbidden: token may be invalid or model may be gated")
 	case http.StatusNotFound:
-		return nil, errors.New("model or tokenizer.json not found")
+		return nil, resp, errors.New("model or tokenizer.json not found")
 	case http.StatusTooManyRequests:
-		// Parse retry-after header if available
-		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-			return nil, errors.Errorf("rate limited: retry after %s seconds", retryAfter)
-		}
-		return nil, errors.New("rate limited: too many requests")
+		// Return with response so caller can parse Retry-After
+		return nil, resp, errors.New("rate limited: too many requests")
 	default:
-		return nil, errors.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, resp, errors.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Read response body
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read response")
+		return nil, resp, errors.Wrap(err, "failed to read response")
 	}
 
 	// Validate it's valid JSON
 	var validateJSON map[string]interface{}
 	if err := json.Unmarshal(data, &validateJSON); err != nil {
-		return nil, errors.Wrap(err, "invalid tokenizer.json format")
+		return nil, resp, errors.Wrap(err, "invalid tokenizer.json format")
 	}
 
-	return data, nil
+	return data, resp, nil
 }
 
 // validateModelID checks if the model ID is valid
@@ -491,4 +508,27 @@ func ClearHFCache() error {
 	}
 
 	return os.RemoveAll(modelsDir)
+}
+
+// parseRetryAfter parses the Retry-After header value
+// It can be either a delay in seconds or an HTTP date
+func parseRetryAfter(value string) time.Duration {
+	// First, try to parse as seconds
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+
+	// Try to parse as HTTP date (RFC1123)
+	if t, err := http.ParseTime(value); err == nil {
+		// Calculate duration from now
+		duration := time.Until(t)
+		if duration < 0 {
+			// If the time is in the past, don't wait
+			return 0
+		}
+		return duration
+	}
+
+	// If we can't parse it, return 0 (fallback to exponential backoff)
+	return 0
 }
