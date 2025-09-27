@@ -1,6 +1,7 @@
 package tokenizers
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -436,4 +438,156 @@ func getTestLibraryPath() string {
 	}
 
 	return ""
+}
+
+func TestConcurrentDownloads(t *testing.T) {
+	// Track requests to verify concurrent operation
+	requestCount := 0
+	var mu sync.Mutex
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		mu.Unlock()
+
+		// Simulate successful response
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer mockServer.Close()
+
+	// Override the base URL
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+		Revision:   "main",
+	}
+
+	// Run multiple concurrent downloads
+	const numGoroutines = 5
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	errors := make([]error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			modelID := fmt.Sprintf("test-model-%d", id)
+			data, err := downloadTokenizerFromHF(modelID, config)
+			if err != nil {
+				errors[id] = err
+			}
+			assert.NoError(t, err, "Download %d should succeed", id)
+			assert.NotNil(t, data, "Data for download %d should not be nil", id)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all requests were handled
+	assert.Equal(t, numGoroutines, requestCount, "All requests should complete")
+
+	// Verify no errors occurred during concurrent downloads
+	for i, err := range errors {
+		assert.NoError(t, err, "Concurrent download %d should not error", i)
+	}
+
+	// The shared client ensures thread-safe concurrent operation
+	// Connection pooling happens at transport level (not easily testable with httptest)
+	t.Logf("Successfully handled %d concurrent downloads", numGoroutines)
+}
+
+func TestHTTPClientInitialization(t *testing.T) {
+	// Reset the client to test initialization
+	hfHTTPClient = nil
+	hfClientOnce = sync.Once{}
+
+	// Get the client multiple times
+	client1 := getHFHTTPClient()
+	client2 := getHFHTTPClient()
+
+	// Should be the same instance
+	assert.Same(t, client1, client2, "Should return the same HTTP client instance")
+
+	// Verify client configuration
+	assert.NotNil(t, client1, "HTTP client should not be nil")
+
+	// Check that transport is configured properly
+	transport, ok := client1.Transport.(*http.Transport)
+	assert.True(t, ok, "Transport should be *http.Transport")
+	assert.Equal(t, 100, transport.MaxIdleConns, "MaxIdleConns should be 100")
+	assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 10")
+	assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 90s")
+}
+
+func TestConnectionReuse(t *testing.T) {
+	// Track connections to verify reuse
+	var connectionIDs []string
+	var mu sync.Mutex
+
+	// Create HTTPS test server that tracks connections
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Track connection by remote address
+		mu.Lock()
+		connID := r.RemoteAddr
+		connectionIDs = append(connectionIDs, connID)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer server.Close()
+
+	// Override base URL to use test server
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = server.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	// Reset HTTP client to ensure we're testing fresh
+	hfHTTPClient = nil
+	hfClientOnce = sync.Once{}
+
+	// Initialize client with test TLS config that accepts test certificates
+	initHFHTTPClient()
+	if transport, ok := hfHTTPClient.Transport.(*http.Transport); ok {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true, // Required for test server's self-signed cert
+		}
+	}
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+		Revision:   "main",
+	}
+
+	// Make multiple sequential requests
+	const numRequests = 3
+	for i := 0; i < numRequests; i++ {
+		data, err := downloadTokenizerFromHF(fmt.Sprintf("model-%d", i), config)
+		assert.NoError(t, err, "Request %d should succeed", i)
+		assert.NotNil(t, data, "Data for request %d should not be nil", i)
+
+		// Small delay to ensure connection pooling has time to work
+		if i < numRequests-1 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// Count unique connections
+	uniqueConns := make(map[string]bool)
+	for _, connID := range connectionIDs {
+		uniqueConns[connID] = true
+	}
+
+	// With connection reuse, we should see the same connection ID multiple times
+	t.Logf("Unique connections: %d, Total requests: %d", len(uniqueConns), numRequests)
+	t.Logf("Connection IDs: %v", connectionIDs)
+
+	// Should reuse connections - expecting fewer unique connections than requests
+	assert.Less(t, len(uniqueConns), numRequests, "Should reuse connections (fewer unique connections than requests)")
 }

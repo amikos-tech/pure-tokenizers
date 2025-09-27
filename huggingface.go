@@ -1,14 +1,17 @@
 package tokenizers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -24,6 +27,10 @@ const (
 var (
 	HFHubBaseURL   = "https://huggingface.co" // Variable to allow testing with mock server
 	libraryVersion = "0.1.0"                  // Default version, will be set from library if available
+
+	// Shared HTTP client for HuggingFace downloads with connection pooling
+	hfHTTPClient *http.Client
+	hfClientOnce sync.Once
 )
 
 // GetLibraryVersion returns the current library version used in User-Agent
@@ -36,6 +43,40 @@ func SetLibraryVersion(version string) {
 	if version != "" {
 		libraryVersion = version
 	}
+}
+
+// initHFHTTPClient initializes the shared HTTP client with connection pooling
+func initHFHTTPClient() {
+	hfClientOnce.Do(func() {
+		transport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:   true,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			// IdleConnTimeout: 90s is suitable for long-running processes that may
+			// have periods of inactivity between downloads. For short scripts that
+			// exit quickly, connections will be closed automatically on program exit.
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+
+		hfHTTPClient = &http.Client{
+			Transport: transport,
+			// Default timeout - will be overridden per-request using context
+			Timeout: 0,
+		}
+	})
+}
+
+// getHFHTTPClient returns the shared HTTP client for HuggingFace downloads
+func getHFHTTPClient() *http.Client {
+	initHFHTTPClient()
+	return hfHTTPClient
 }
 
 // HFConfig holds HuggingFace-specific configuration
@@ -223,11 +264,11 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 
 // downloadWithRetry performs a single download attempt
 func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
-	client := &http.Client{
-		Timeout: config.Timeout,
-	}
+	// Create a context with timeout for this specific request
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create request")
 	}
@@ -238,6 +279,8 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+config.Token)
 	}
 
+	// Use the shared HTTP client with connection pooling
+	client := getHFHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "request failed")
