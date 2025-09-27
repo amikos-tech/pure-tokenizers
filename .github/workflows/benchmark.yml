@@ -1,0 +1,192 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'src/**'
+      - 'Cargo.toml'
+      - '.github/workflows/benchmark.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'src/**'
+      - 'Cargo.toml'
+      - '.github/workflows/benchmark.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  deployments: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Run Go benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build Rust library
+      run: cargo build --release
+
+    - name: Run benchmarks
+      run: |
+        set -o pipefail
+        export TOKENIZERS_LIB_PATH="${{ github.workspace }}/target/release/libtokenizers.so"
+        go test -bench=. -benchmem -count=5 ./... | tee benchmark_output.txt
+
+    - name: Store benchmark result
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Go Benchmark
+        tool: 'go'
+        output-file-path: benchmark_output.txt
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        alert-threshold: '120%'
+        comment-on-alert: true
+        fail-on-alert: false
+        alert-comment-cc-users: '@tazarov'
+        summary-always: true
+
+    - name: Upload benchmark results
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: benchmark_output.txt
+        retention-days: 30
+
+  benchmark-compare:
+    name: Compare benchmarks (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout PR code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install benchstat
+      run: go install golang.org/x/perf/cmd/benchstat@latest
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build Rust library
+      run: cargo build --release
+
+    - name: Run benchmarks on PR branch
+      run: |
+        export TOKENIZERS_LIB_PATH="${{ github.workspace }}/target/release/libtokenizers.so"
+        go test -bench=. -benchmem -count=5 ./... > pr_bench.txt
+
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.base_ref }}
+        path: base
+
+    - name: Build base branch
+      working-directory: base
+      run: cargo build --release
+
+    - name: Run benchmarks on base branch
+      working-directory: base
+      continue-on-error: true
+      run: |
+        export TOKENIZERS_LIB_PATH="${{ github.workspace }}/base/target/release/libtokenizers.so"
+        go test -bench=. -benchmem -count=5 ./... > ../base_bench.txt || echo "No benchmarks found in base branch" > ../base_bench.txt
+
+    - name: Compare benchmarks
+      run: |
+        echo "## Benchmark Comparison" > benchmark_comment.md
+        echo "" >> benchmark_comment.md
+        echo "\`\`\`" >> benchmark_comment.md
+        benchstat base_bench.txt pr_bench.txt >> benchmark_comment.md || true
+        echo "\`\`\`" >> benchmark_comment.md
+        cat benchmark_comment.md
+
+    - name: Comment PR with benchmark results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const fs = require('fs');
+          const comment = fs.readFileSync('benchmark_comment.md', 'utf8');
+
+          const issue_number = context.issue.number;
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+
+          // Find and update existing comment or create new one
+          const { data: comments } = await github.rest.issues.listComments({
+            owner,
+            repo,
+            issue_number,
+          });
+
+          const botComment = comments.find(comment =>
+            comment.user.type === 'Bot' &&
+            comment.body.includes('## Benchmark Comparison')
+          );
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: botComment.id,
+              body: comment
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: comment
+            });
+          }

@@ -1,6 +1,6 @@
 module main
 
-go 1.25.0
+go 1.24
 
 require (
 	github.com/amikos-tech/pure-tokenizers v0.0.2-0.20250819144926-3e172496a618 // indirect
