@@ -210,7 +210,7 @@ func downloadWithRetry(url string, config *HFConfig) ([]byte, error) {
 	}
 
 	// Set headers
-	req.Header.Set("User-Agent", "pure-tokenizers/1.0")
+	req.Header.Set("User-Agent", "pure-tokenizers/0.1.0") // Version from Cargo.toml
 	if config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+config.Token)
 	}
@@ -318,7 +318,7 @@ func getHFCacheDir() string {
 func saveToHFCache(path string, data []byte) error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return errors.Wrap(err, "failed to create cache directory")
 	}
 
