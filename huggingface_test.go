@@ -721,14 +721,13 @@ func TestRetryAfterHeader(t *testing.T) {
 
 func TestRetryAfterWithHTTPDate(t *testing.T) {
 	attemptCount := 0
-	var retryAfterTime time.Time
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attemptCount++
 		if attemptCount < 2 {
-			// Return 429 with Retry-After as HTTP date (1 second in future)
-			// Using 1 second to avoid timing issues
-			retryAfterTime = time.Now().Add(1 * time.Second)
+			// Return 429 with Retry-After as HTTP date (2 seconds in future)
+			// Using 2 seconds to ensure the time hasn't passed yet
+			retryAfterTime := time.Now().Add(2 * time.Second)
 			w.Header().Set("Retry-After", retryAfterTime.UTC().Format(http.TimeFormat))
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -760,10 +759,12 @@ func TestRetryAfterWithHTTPDate(t *testing.T) {
 	// Verify it made 2 attempts
 	assert.Equal(t, 2, attemptCount, "Expected 2 attempts")
 
-	// Verify total duration is approximately what we expect (with tolerance for timing variations)
-	// The delay should be close to 1 second (allowing for some tolerance)
-	assert.InDelta(t, 1000, duration.Milliseconds(), 300,
-		"Total duration should be approximately 1 second due to Retry-After header")
+	// Verify total duration is at least close to what we expect
+	// The delay should be at least 1.5 seconds but not more than 3 seconds
+	assert.GreaterOrEqual(t, duration.Milliseconds(), int64(1500),
+		"Total duration should be at least 1.5 seconds due to Retry-After header")
+	assert.LessOrEqual(t, duration.Milliseconds(), int64(3000),
+		"Total duration should be less than 3 seconds")
 }
 
 func TestFallbackToExponentialBackoff(t *testing.T) {
