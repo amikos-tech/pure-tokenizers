@@ -289,6 +289,11 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.vocabSize, tokenizer.libh, "vocab_size")
 	purego.RegisterLibFunc(&tokenizer.getVersion, tokenizer.libh, "get_version")
 
+	// Initialize library version for HuggingFace User-Agent
+	if tokenizer.getVersion != nil {
+		SetLibraryVersion(tokenizer.getVersion())
+	}
+
 	tOpts := &TokenizerOptions{}
 	if tokenizer.TruncationEnabled {
 		tOpts = &TokenizerOptions{
