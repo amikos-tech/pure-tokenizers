@@ -7,14 +7,26 @@ on:
       - '**.go'
       - 'src/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/benchmark.yml'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
     branches: [ main ]
     paths:
       - '**.go'
       - 'src/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/benchmark.yml'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
 
 permissions:
