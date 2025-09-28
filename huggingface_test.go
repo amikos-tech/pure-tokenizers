@@ -174,7 +174,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 
 		case "/rate-limited/resolve/main/tokenizer.json":
-			w.Header().Set("Retry-After", "60")
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 
 		default:
@@ -590,4 +590,237 @@ func TestConnectionReuse(t *testing.T) {
 
 	// Should reuse connections - expecting fewer unique connections than requests
 	assert.Less(t, len(uniqueConns), numRequests, "Should reuse connections (fewer unique connections than requests)")
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	testCases := []struct {
+		name         string
+		value        string
+		expectedMin  time.Duration
+		expectedMax  time.Duration
+	}{
+		{
+			name:        "Seconds value",
+			value:       "120",
+			expectedMin: 120 * time.Second,
+			expectedMax: 120 * time.Second,
+		},
+		{
+			name:        "Zero seconds",
+			value:       "0",
+			expectedMin: 0,
+			expectedMax: 0,
+		},
+		{
+			name: "HTTP date in future",
+			// We'll calculate this dynamically
+			value:       time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat),
+			expectedMin: 29 * time.Second,  // Allow 1 second tolerance
+			expectedMax: 31 * time.Second,
+		},
+		{
+			name: "HTTP date in past",
+			value: time.Now().Add(-30 * time.Second).UTC().Format(http.TimeFormat),
+			expectedMin: 0,
+			expectedMax: 0,
+		},
+		{
+			name:        "Invalid value",
+			value:       "invalid",
+			expectedMin: 0,
+			expectedMax: 0,
+		},
+		{
+			name:        "Excessive seconds value - should be capped",
+			value:       "3600", // 1 hour
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name: "Excessive HTTP date - should be capped",
+			value:       time.Now().Add(10 * time.Hour).UTC().Format(http.TimeFormat),
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name:        "Value exactly at cap",
+			value:       "300", // 5 minutes
+			expectedMin: HFMaxRetryAfterDelay,
+			expectedMax: HFMaxRetryAfterDelay,
+		},
+		{
+			name:        "Value just under cap",
+			value:       "299", // Just under 5 minutes
+			expectedMin: 299 * time.Second,
+			expectedMax: 299 * time.Second,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			duration := parseRetryAfter(tc.value)
+			assert.GreaterOrEqual(t, duration, tc.expectedMin)
+			assert.LessOrEqual(t, duration, tc.expectedMax)
+		})
+	}
+}
+
+func TestRetryAfterHeader(t *testing.T) {
+	attemptCount := 0
+	var receivedDelays []time.Duration
+	startTime := time.Now()
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		if attemptCount < 3 {
+			// Calculate delay since last request
+			if attemptCount > 1 {
+				delay := time.Since(startTime)
+				receivedDelays = append(receivedDelays, delay)
+				startTime = time.Now()
+			}
+
+			// Return 429 with Retry-After header
+			w.Header().Set("Retry-After", "1") // 1 second
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		// Succeed on third attempt
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer mockServer.Close()
+
+	// Override the base URL
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 3,
+		Revision:   "main",
+	}
+
+	// Call the function with retry logic
+	data, err := downloadTokenizerFromHF("test-model", config)
+	require.NoError(t, err)
+	assert.NotNil(t, data)
+
+	// Verify it made 3 attempts
+	assert.Equal(t, 3, attemptCount, "Expected 3 attempts")
+
+	// Verify that the retry delays honored the Retry-After header
+	// The delays should be close to 1 second (allowing for some tolerance)
+	for i, delay := range receivedDelays {
+		// Allow 100ms tolerance for timing variations
+		assert.InDelta(t, 1000, delay.Milliseconds(), 200,
+			"Retry delay %d should be approximately 1 second", i+1)
+	}
+}
+
+func TestRetryAfterWithHTTPDate(t *testing.T) {
+	attemptCount := 0
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		if attemptCount < 2 {
+			// Return 429 with Retry-After as HTTP date
+			// Set a time far enough in the future to be reliable
+			retryAfterTime := time.Now().Add(500 * time.Millisecond)
+			w.Header().Set("Retry-After", retryAfterTime.UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		// Succeed on second attempt
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer mockServer.Close()
+
+	// Override the base URL
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 3,
+		Revision:   "main",
+	}
+
+	startTime := time.Now()
+	data, err := downloadTokenizerFromHF("test-model", config)
+	duration := time.Since(startTime)
+
+	require.NoError(t, err)
+	assert.NotNil(t, data)
+
+	// Verify it made 2 attempts
+	assert.Equal(t, 2, attemptCount, "Expected 2 attempts")
+
+	// Just verify that the retry completed in a reasonable time
+	// We're mainly testing that the Retry-After header is parsed correctly
+	// and doesn't cause errors or excessive delays
+	assert.LessOrEqual(t, duration.Milliseconds(), int64(2000),
+		"Total duration should be less than 2 seconds")
+}
+
+func TestFallbackToExponentialBackoff(t *testing.T) {
+	attemptCount := 0
+	var receivedDelays []time.Duration
+	startTime := time.Now()
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		if attemptCount < 3 {
+			// Calculate delay since last request
+			if attemptCount > 1 {
+				delay := time.Since(startTime)
+				receivedDelays = append(receivedDelays, delay)
+				startTime = time.Now()
+			}
+
+			// Return 500 without Retry-After header (should use exponential backoff)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		// Succeed on third attempt
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mockTokenizerJSON))
+	}))
+	defer mockServer.Close()
+
+	// Override the base URL
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:    5 * time.Second,
+		MaxRetries: 3,
+		Revision:   "main",
+	}
+
+	// Call the function with retry logic
+	data, err := downloadTokenizerFromHF("test-model", config)
+	require.NoError(t, err)
+	assert.NotNil(t, data)
+
+	// Verify it made 3 attempts
+	assert.Equal(t, 3, attemptCount, "Expected 3 attempts")
+
+	// Verify exponential backoff pattern
+	// First retry should be around 1 second (base delay)
+	// Second retry should be around 2 seconds (exponential increase)
+	if len(receivedDelays) >= 1 {
+		// First retry: ~1s + jitter (0-250ms)
+		assert.InDelta(t, 1000, receivedDelays[0].Milliseconds(), 500,
+			"First retry should use base delay with jitter")
+	}
+	if len(receivedDelays) >= 2 {
+		// Second retry: ~2s + jitter (0-500ms)
+		assert.InDelta(t, 2000, receivedDelays[1].Milliseconds(), 750,
+			"Second retry should use exponential backoff with jitter")
+	}
 }
