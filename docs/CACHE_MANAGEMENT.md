@@ -101,7 +101,7 @@ fi
 # Download tokenizers
 for MODEL in "${MODELS[@]}"; do
     # Replace / with -- for directory name
-    DIR_NAME="${MODEL//\/--}"
+    DIR_NAME="${MODEL//\//--}"
     MODEL_DIR="$CACHE_DIR/$DIR_NAME/main"
 
     echo "Downloading $MODEL..."

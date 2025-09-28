@@ -162,9 +162,9 @@ The library detects and handles:
 - **Windows**: `%APPDATA%/tokenizers/lib/`
 
 #### HuggingFace Cache
-- **macOS**: `~/Library/Caches/tokenizers/huggingface/models/`
-- **Linux**: `~/.cache/tokenizers/huggingface/models/` or `$XDG_CACHE_HOME/tokenizers/huggingface/models/`
-- **Windows**: `%APPDATA%/tokenizers/huggingface/models/`
+- **macOS**: `~/Library/Caches/tokenizers/lib/hf/models/`
+- **Linux**: `~/.cache/tokenizers/lib/hf/models/` or `$XDG_CACHE_HOME/tokenizers/lib/hf/models/`
+- **Windows**: `%APPDATA%/tokenizers/lib/hf/models/`
 
 ## Environment Variables
 
