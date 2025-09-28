@@ -43,9 +43,9 @@ You can load any tokenizer from HuggingFace that uses the `tokenizer.json` forma
 
 Models are cached locally for offline use:
 
-- **macOS**: `~/Library/Caches/huggingface/models/`
-- **Linux**: `~/.cache/huggingface/models/`
-- **Windows**: `%APPDATA%/huggingface/models/`
+- **macOS**: `~/Library/Caches/tokenizers/lib/hf/models/`
+- **Linux**: `~/.cache/tokenizers/lib/hf/models/` or `$XDG_CACHE_HOME/tokenizers/lib/hf/models/`
+- **Windows**: `%APPDATA%/tokenizers/lib/hf/models/`
 
 ## Environment Variables
 

@@ -112,6 +112,12 @@ tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
 //                 %APPDATA%/tokenizers/huggingface/ (Windows)
 ```
 
+📚 **See also:**
+- [HuggingFace Integration Guide](docs/HUGGINGFACE.md) - Comprehensive documentation
+- [Example: Basic Usage](examples/huggingface/basic/) - Loading various models
+- [Example: Cache Management](examples/huggingface/cache/) - Working with cache
+- [Example: Private Models](examples/huggingface/private/) - Authentication and gated models
+
 ### Basic Tokenization
 
 ```go
