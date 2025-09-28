@@ -224,7 +224,9 @@ func clearModelCache() error {
 	fmt.Printf("Clearing cache for %s...\n", modelID)
 	err = tokenizers.ClearHFModelCache(modelID)
 	if err != nil {
+		// Cache clearing may fail due to permissions or if files are in use
 		fmt.Printf("  Note: Cache clearing may require permissions: %v\n", err)
+		// This is typically non-critical, so we continue execution
 	} else {
 		fmt.Printf("  Cache cleared successfully\n")
 

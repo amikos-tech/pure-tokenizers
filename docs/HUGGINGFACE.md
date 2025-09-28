@@ -7,8 +7,10 @@ This guide covers the comprehensive HuggingFace Hub integration in pure-tokenize
 - [Supported Models](#supported-models)
 - [Basic Usage](#basic-usage)
 - [Authentication](#authentication)
+- [Token Security Best Practices](#token-security-best-practices)
 - [Configuration Options](#configuration-options)
 - [Cache System](#cache-system)
+- [Rate Limiting and Retry Logic](#rate-limiting-and-retry-logic)
 - [Migration from Python](#migration-from-python)
 - [Advanced Usage](#advanced-usage)
 - [Troubleshooting](#troubleshooting)
@@ -126,6 +128,98 @@ if err != nil {
 }
 ```
 
+## Token Security Best Practices
+
+### Secure Token Storage
+
+**Never commit tokens to version control.** Follow these security practices:
+
+#### 1. Use Environment Variables
+```bash
+# .env file (add to .gitignore)
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Load in your application
+import "github.com/joho/godotenv"
+
+func init() {
+    if err := godotenv.Load(); err != nil {
+        log.Println("No .env file found")
+    }
+}
+```
+
+#### 2. Use Secret Management Systems
+```go
+// Example with AWS Secrets Manager
+func getTokenFromSecretsManager() (string, error) {
+    // Implementation depends on your cloud provider
+    // AWS, GCP, Azure, Vault, etc.
+    return secretsManager.GetSecret("hf-token")
+}
+
+// Use in production
+token, err := getTokenFromSecretsManager()
+if err != nil {
+    return fmt.Errorf("failed to retrieve token: %w", err)
+}
+tokenizer, err := tokenizers.FromHuggingFace("model-id",
+    tokenizers.WithHFToken(token),
+)
+```
+
+#### 3. Git Security
+```bash
+# Add to .gitignore
+.env
+*.token
+*_token.txt
+secrets/
+
+# Use git-secrets to prevent accidental commits
+git secrets --install
+git secrets --register-aws  # Registers common token patterns
+```
+
+#### 4. Token Rotation
+```go
+// Implement token rotation for production systems
+type TokenProvider interface {
+    GetToken() (string, error)
+    RefreshToken() error
+}
+
+type RotatingTokenProvider struct {
+    mu            sync.RWMutex
+    currentToken  string
+    lastRotated   time.Time
+    rotationPeriod time.Duration
+}
+
+func (p *RotatingTokenProvider) GetToken() (string, error) {
+    p.mu.RLock()
+    defer p.mu.RUnlock()
+
+    if time.Since(p.lastRotated) > p.rotationPeriod {
+        go p.RefreshToken() // Async refresh
+    }
+
+    return p.currentToken, nil
+}
+```
+
+#### 5. Audit and Monitoring
+```go
+// Log token usage (without exposing the token)
+func logTokenUsage(modelID string, tokenHash string) {
+    log.Printf("Token %s used for model %s at %s",
+        tokenHash[:8], // Only log first 8 chars
+        modelID,
+        time.Now().Format(time.RFC3339),
+    )
+}
+```
+
 ## Configuration Options
 
 ### All Available Options
@@ -235,10 +329,16 @@ fmt.Printf("Cache info: %+v\n", info)
 
 ```go
 // Clear cache for specific model
-err := tokenizers.ClearHFModelCache("bert-base-uncased")
+if err := tokenizers.ClearHFModelCache("bert-base-uncased"); err != nil {
+    log.Printf("Failed to clear model cache: %v", err)
+    // Handle error appropriately - cache clearing is often non-critical
+}
 
 // Clear entire HuggingFace cache
-err := tokenizers.ClearHFCache()
+if err := tokenizers.ClearHFCache(); err != nil {
+    log.Printf("Failed to clear HuggingFace cache: %v", err)
+    // Continue execution - cache operations are typically non-blocking
+}
 ```
 
 #### Offline Mode
@@ -246,7 +346,7 @@ err := tokenizers.ClearHFCache()
 Use cached tokenizers without network access:
 
 ```go
-// This will fail if the model is not already cached
+// This will return an error if the model is not already cached
 tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
     tokenizers.WithHFOfflineMode(true),
 )
@@ -258,10 +358,328 @@ Pure-tokenizers can also read from the standard HuggingFace cache if present:
 
 ```go
 // Set HF_HOME to use existing HuggingFace cache
-os.Setenv("HF_HOME", "/path/to/huggingface/cache")
+if err := os.Setenv("HF_HOME", "/path/to/huggingface/cache"); err != nil {
+    log.Printf("Warning: Failed to set HF_HOME: %v", err)
+}
 
 // The library will check this cache before downloading
 tokenizer, err := tokenizers.FromHuggingFace("model-id")
+if err != nil {
+    return fmt.Errorf("failed to load tokenizer: %w", err)
+}
+defer tokenizer.Close()
+```
+
+### Cache Management Strategies for Production
+
+#### Cache Size Management
+
+```go
+import (
+    "path/filepath"
+    "os"
+    "time"
+)
+
+// GetCacheSize calculates total cache size
+func GetCacheSize(cacheDir string) (int64, error) {
+    var size int64
+    err := filepath.Walk(cacheDir, func(_ string, info os.FileInfo, err error) error {
+        if err != nil {
+            return err
+        }
+        if !info.IsDir() {
+            size += info.Size()
+        }
+        return nil
+    })
+    return size, err
+}
+
+// CleanOldCache removes models not accessed in the last N days
+func CleanOldCache(cacheDir string, maxAgeDays int) error {
+    cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
+
+    return filepath.Walk(cacheDir, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return err
+        }
+
+        // Check tokenizer.json files
+        if filepath.Base(path) == "tokenizer.json" && info.ModTime().Before(cutoff) {
+            modelDir := filepath.Dir(filepath.Dir(path)) // Go up two levels
+            log.Printf("Removing old cached model: %s", modelDir)
+            return os.RemoveAll(modelDir)
+        }
+        return nil
+    })
+}
+
+// Production cache management example
+func ManageCacheInProduction() error {
+    cacheDir := tokenizers.GetHFCacheDir()
+
+    // Check cache size
+    size, err := GetCacheSize(cacheDir)
+    if err != nil {
+        return fmt.Errorf("failed to get cache size: %w", err)
+    }
+
+    // If cache exceeds 10GB, clean models older than 30 days
+    const maxCacheSize = 10 * 1024 * 1024 * 1024 // 10GB
+    if size > maxCacheSize {
+        if err := CleanOldCache(cacheDir, 30); err != nil {
+            log.Printf("Cache cleanup failed: %v", err)
+            // Don't fail the application for cache cleanup errors
+        }
+    }
+
+    return nil
+}
+```
+
+#### Cache Warming Strategy
+
+```go
+// WarmCache pre-loads frequently used models during application startup
+func WarmCache(models []string) {
+    var wg sync.WaitGroup
+
+    for _, modelID := range models {
+        wg.Add(1)
+        go func(model string) {
+            defer wg.Done()
+
+            // Try to load the model to ensure it's cached
+            tok, err := tokenizers.FromHuggingFace(model)
+            if err != nil {
+                log.Printf("Failed to warm cache for %s: %v", model, err)
+                return
+            }
+            tok.Close()
+            log.Printf("Successfully cached %s", model)
+        }(modelID)
+    }
+
+    wg.Wait()
+}
+
+// Use during application initialization
+func init() {
+    criticalModels := []string{
+        "bert-base-uncased",
+        "gpt2",
+        "distilbert-base-uncased",
+    }
+    WarmCache(criticalModels)
+}
+```
+
+## Rate Limiting and Retry Logic
+
+### HuggingFace API Rate Limits
+
+HuggingFace Hub implements rate limiting to ensure fair usage:
+
+- **Anonymous requests**: ~100 requests per hour
+- **Authenticated requests**: ~1000 requests per hour (varies by account type)
+- **Rate limit headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+
+### Built-in Retry Strategy
+
+Pure-tokenizers implements intelligent retry logic with exponential backoff:
+
+```go
+// Default retry configuration
+const (
+    HFMaxRetries = 3                    // Maximum number of retry attempts
+    HFRetryDelay = 1 * time.Second      // Base delay between retries
+    HFMaxRetryAfterDelay = 5 * time.Minute // Maximum delay from Retry-After header
+)
+```
+
+### How Retry Logic Works
+
+1. **Exponential Backoff with Jitter**
+```go
+// The library automatically implements this retry strategy:
+// Attempt 1: Immediate
+// Attempt 2: 1s + jitter (0-250ms)
+// Attempt 3: 2s + jitter (0-500ms)
+// Attempt 4: 4s + jitter (0-1s)
+```
+
+2. **Retry-After Header Handling**
+```go
+// When HuggingFace returns 429 (Too Many Requests), it may include a Retry-After header
+// The library respects this header and waits accordingly:
+// - Numeric value: delay in seconds
+// - HTTP date: specific time to retry after
+// - Maximum wait capped at 5 minutes to prevent abuse
+```
+
+3. **Non-Retryable Errors**
+The following errors are not retried:
+- `401 Unauthorized` - Invalid or missing token
+- `403 Forbidden` - No access to model
+- `404 Not Found` - Model doesn't exist
+
+### Custom Retry Implementation
+
+For advanced use cases, implement custom retry logic:
+
+```go
+type RetryConfig struct {
+    MaxAttempts int
+    BaseDelay   time.Duration
+    MaxDelay    time.Duration
+    Multiplier  float64
+}
+
+func LoadWithCustomRetry(modelID string, config RetryConfig) (*tokenizers.Tokenizer, error) {
+    var lastErr error
+
+    for attempt := 0; attempt < config.MaxAttempts; attempt++ {
+        // Calculate delay with exponential backoff
+        if attempt > 0 {
+            delay := time.Duration(float64(config.BaseDelay) * math.Pow(config.Multiplier, float64(attempt-1)))
+            if delay > config.MaxDelay {
+                delay = config.MaxDelay
+            }
+
+            // Add jitter to prevent thundering herd
+            jitter := time.Duration(rand.Float64() * float64(delay) * 0.1)
+            time.Sleep(delay + jitter)
+
+            log.Printf("Retry attempt %d/%d after %v", attempt+1, config.MaxAttempts, delay+jitter)
+        }
+
+        tokenizer, err := tokenizers.FromHuggingFace(modelID,
+            tokenizers.WithHFTimeout(30*time.Second),
+        )
+        if err == nil {
+            return tokenizer, nil
+        }
+
+        lastErr = err
+
+        // Check if error is retryable
+        if strings.Contains(err.Error(), "401") ||
+           strings.Contains(err.Error(), "403") ||
+           strings.Contains(err.Error(), "404") {
+            return nil, err // Don't retry these errors
+        }
+    }
+
+    return nil, fmt.Errorf("failed after %d attempts: %w", config.MaxAttempts, lastErr)
+}
+```
+
+### Monitoring Rate Limits
+
+```go
+// Track rate limit usage in production
+type RateLimitMonitor struct {
+    mu          sync.Mutex
+    requests    []time.Time
+    windowSize  time.Duration
+}
+
+func (m *RateLimitMonitor) RecordRequest() {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    now := time.Now()
+    m.requests = append(m.requests, now)
+
+    // Clean old requests outside the window
+    cutoff := now.Add(-m.windowSize)
+    i := 0
+    for i < len(m.requests) && m.requests[i].Before(cutoff) {
+        i++
+    }
+    m.requests = m.requests[i:]
+}
+
+func (m *RateLimitMonitor) GetRequestRate() float64 {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    if len(m.requests) == 0 {
+        return 0
+    }
+
+    elapsed := time.Since(m.requests[0])
+    if elapsed.Seconds() == 0 {
+        return float64(len(m.requests))
+    }
+    return float64(len(m.requests)) / elapsed.Seconds()
+}
+
+// Use in production
+monitor := &RateLimitMonitor{
+    windowSize: time.Hour,
+}
+
+// Before each request
+monitor.RecordRequest()
+if monitor.GetRequestRate() > 15 { // 15 requests per second threshold
+    log.Printf("Warning: High request rate: %.2f req/s", monitor.GetRequestRate())
+    time.Sleep(time.Second) // Throttle
+}
+```
+
+### Best Practices for Rate Limiting
+
+1. **Cache Aggressively**: Reduce API calls by caching tokenizers locally
+2. **Batch Operations**: Load multiple models in parallel when possible
+3. **Use Offline Mode**: For production, pre-cache models and use offline mode
+4. **Implement Circuit Breakers**: Prevent cascading failures
+
+```go
+type CircuitBreaker struct {
+    mu            sync.Mutex
+    failures      int
+    lastFailTime  time.Time
+    state         string // "closed", "open", "half-open"
+    threshold     int
+    timeout       time.Duration
+}
+
+func (cb *CircuitBreaker) Call(fn func() error) error {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+
+    // Check circuit state
+    if cb.state == "open" {
+        if time.Since(cb.lastFailTime) > cb.timeout {
+            cb.state = "half-open"
+            cb.failures = 0
+        } else {
+            return fmt.Errorf("circuit breaker is open")
+        }
+    }
+
+    // Execute function
+    err := fn()
+    if err != nil {
+        cb.failures++
+        cb.lastFailTime = time.Now()
+
+        if cb.failures >= cb.threshold {
+            cb.state = "open"
+            return fmt.Errorf("circuit breaker opened after %d failures: %w", cb.failures, err)
+        }
+        return err
+    }
+
+    // Success - reset failures
+    if cb.state == "half-open" {
+        cb.state = "closed"
+    }
+    cb.failures = 0
+    return nil
+}
 ```
 
 ## Migration from Python
