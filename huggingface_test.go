@@ -507,8 +507,9 @@ func TestHTTPClientInitialization(t *testing.T) {
 	hfClientOnce = sync.Once{}
 
 	// Get the client multiple times
-	client1 := getHFHTTPClient()
-	client2 := getHFHTTPClient()
+	config := &HFConfig{}
+	client1 := getHFHTTPClient(config)
+	client2 := getHFHTTPClient(config)
 
 	// Should be the same instance
 	assert.Same(t, client1, client2, "Should return the same HTTP client instance")
@@ -552,17 +553,16 @@ func TestConnectionReuse(t *testing.T) {
 	hfClientOnce = sync.Once{}
 
 	// Initialize client with test TLS config that accepts test certificates
-	initHFHTTPClient()
-	if transport, ok := hfHTTPClient.Transport.(*http.Transport); ok {
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true, // Required for test server's self-signed cert
-		}
-	}
-
 	config := &HFConfig{
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
+	}
+	initHFHTTPClient(config)
+	if transport, ok := hfHTTPClient.Transport.(*http.Transport); ok {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true, // Required for test server's self-signed cert
+		}
 	}
 
 	// Make multiple sequential requests
@@ -823,4 +823,139 @@ func TestFallbackToExponentialBackoff(t *testing.T) {
 		assert.InDelta(t, 2000, receivedDelays[1].Milliseconds(), 750,
 			"Second retry should use exponential backoff with jitter")
 	}
+}
+
+func TestHTTPPoolingConfiguration(t *testing.T) {
+	t.Run("ConfigFieldsOverrideDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		config := &HFConfig{
+			HTTPMaxIdleConns:        200,
+			HTTPMaxIdleConnsPerHost: 20,
+			HTTPIdleTimeout:         120 * time.Second,
+		}
+
+		// Initialize client with custom config
+		initHFHTTPClient(config)
+
+		// Verify custom configuration
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 200, transport.MaxIdleConns, "MaxIdleConns should be 200")
+		assert.Equal(t, 20, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 20")
+		assert.Equal(t, 120*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 120s")
+	})
+
+	t.Run("EnvironmentVariablesOverrideDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "250")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "25")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "2m30s")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		config := &HFConfig{} // Empty config to test env vars
+
+		// Initialize client with env vars
+		initHFHTTPClient(config)
+
+		// Verify environment variable configuration
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 250, transport.MaxIdleConns, "MaxIdleConns should be 250 from env")
+		assert.Equal(t, 25, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 25 from env")
+		assert.Equal(t, 150*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 2m30s from env")
+	})
+
+	t.Run("ConfigFieldsOverrideEnvironmentVariables", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "250")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "25")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "2m30s")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		// Config values should override env vars
+		config := &HFConfig{
+			HTTPMaxIdleConns:        300,
+			HTTPMaxIdleConnsPerHost: 30,
+			HTTPIdleTimeout:         180 * time.Second,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify config overrides env vars
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 300, transport.MaxIdleConns, "Config should override env var")
+		assert.Equal(t, 30, transport.MaxIdleConnsPerHost, "Config should override env var")
+		assert.Equal(t, 180*time.Second, transport.IdleConnTimeout, "Config should override env var")
+	})
+
+	t.Run("InvalidEnvironmentVariablesUseDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set invalid environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "invalid")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "-5")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "not-a-duration")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		config := &HFConfig{} // Empty config
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Should use defaults when env vars are invalid
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 100, transport.MaxIdleConns, "Should use default when env var is invalid")
+		assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "Should use default when env var is invalid")
+		assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "Should use default when env var is invalid")
+	})
+
+	t.Run("PartialConfigurationUsesDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Only set one config value
+		config := &HFConfig{
+			HTTPMaxIdleConns: 150,
+			// Other fields left as zero values
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify partial config with defaults
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 150, transport.MaxIdleConns, "Should use config value")
+		assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "Should use default")
+		assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "Should use default")
+	})
 }

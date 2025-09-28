@@ -50,8 +50,45 @@ func SetLibraryVersion(version string) {
 }
 
 // initHFHTTPClient initializes the shared HTTP client with connection pooling
-func initHFHTTPClient() {
+func initHFHTTPClient(config *HFConfig) {
 	hfClientOnce.Do(func() {
+		// Apply defaults and environment variables for HTTP pooling configuration
+		maxIdleConns := config.HTTPMaxIdleConns
+		if maxIdleConns == 0 {
+			if envVal := os.Getenv("HF_HTTP_MAX_IDLE_CONNS"); envVal != "" {
+				if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+					maxIdleConns = val
+				}
+			}
+			if maxIdleConns == 0 {
+				maxIdleConns = 100 // default
+			}
+		}
+
+		maxIdleConnsPerHost := config.HTTPMaxIdleConnsPerHost
+		if maxIdleConnsPerHost == 0 {
+			if envVal := os.Getenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST"); envVal != "" {
+				if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+					maxIdleConnsPerHost = val
+				}
+			}
+			if maxIdleConnsPerHost == 0 {
+				maxIdleConnsPerHost = 10 // default
+			}
+		}
+
+		idleTimeout := config.HTTPIdleTimeout
+		if idleTimeout == 0 {
+			if envVal := os.Getenv("HF_HTTP_IDLE_TIMEOUT"); envVal != "" {
+				if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
+					idleTimeout = val
+				}
+			}
+			if idleTimeout == 0 {
+				idleTimeout = 90 * time.Second // default
+			}
+		}
+
 		transport := &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
@@ -59,12 +96,12 @@ func initHFHTTPClient() {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ForceAttemptHTTP2:   true,
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			// IdleConnTimeout: 90s is suitable for long-running processes that may
+			MaxIdleConns:        maxIdleConns,
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			// IdleConnTimeout is suitable for long-running processes that may
 			// have periods of inactivity between downloads. For short scripts that
 			// exit quickly, connections will be closed automatically on program exit.
-			IdleConnTimeout:       90 * time.Second,
+			IdleConnTimeout:       idleTimeout,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
@@ -78,8 +115,8 @@ func initHFHTTPClient() {
 }
 
 // getHFHTTPClient returns the shared HTTP client for HuggingFace downloads
-func getHFHTTPClient() *http.Client {
-	initHFHTTPClient()
+func getHFHTTPClient(config *HFConfig) *http.Client {
+	initHFHTTPClient(config)
 	return hfHTTPClient
 }
 
@@ -91,6 +128,11 @@ type HFConfig struct {
 	Timeout     time.Duration
 	MaxRetries  int
 	OfflineMode bool
+
+	// HTTP client pooling configuration
+	HTTPMaxIdleConns        int           // Maximum number of idle connections across all hosts (default: 100)
+	HTTPMaxIdleConnsPerHost int           // Maximum number of idle connections per host (default: 10)
+	HTTPIdleTimeout         time.Duration // Maximum time to keep idle connections open (default: 90s)
 }
 
 // FromHuggingFace loads a tokenizer from HuggingFace Hub using the model identifier.
@@ -305,7 +347,7 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	}
 
 	// Use the shared HTTP client with connection pooling
-	client := getHFHTTPClient()
+	client := getHFHTTPClient(config)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "request failed")
