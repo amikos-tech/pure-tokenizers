@@ -209,6 +209,8 @@ tokenizer, err := tokenizers.FromFile("tokenizer.json",
 
 ### Cache Management
 
+For comprehensive cache management documentation, see [Cache Management Guide](docs/CACHE_MANAGEMENT.md).
+
 #### Library Cache
 ```go
 // Get the library cache directory
@@ -232,10 +234,9 @@ err := tokenizers.ClearHFModelCache("bert-base-uncased")
 // Clear entire HuggingFace cache
 err := tokenizers.ClearHFCache()
 
-// Cache locations by platform:
-// Linux:   ~/.cache/tokenizers/huggingface/models/
-// macOS:   ~/Library/Caches/tokenizers/huggingface/models/
-// Windows: %APPDATA%/tokenizers/huggingface/models/
+// Use offline mode (only use cached tokenizers)
+tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
+    tokenizers.WithHFOfflineMode(true))
 ```
 
 ## Platform Support
