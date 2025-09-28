@@ -225,8 +225,8 @@ type Tokenizer struct {
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeBuffer          func(buffer *Buffer)
-	freeString          func(ptr *string)
-	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *string) int32
+	freeString          func(ptr unsafe.Pointer)
+	decode              func(ptr unsafe.Pointer, ids *uint32, len uint32, skipSpecialTokens bool, result *unsafe.Pointer) int32
 	vocabSize           func(ptr unsafe.Pointer, size *uint32) int32
 	getVersion          func() string
 	defaultEncodingOpts EncodeOptions
@@ -236,7 +236,7 @@ type Tokenizer struct {
 	TruncationMaxLength uintptr // Maximum length for truncation
 	PaddingEnabled      bool
 	PaddingStrategy     PaddingStrategy // Strategy for padding
-	hfConfig            *HFConfig     // HuggingFace configuration
+	hfConfig            *HFConfig       // HuggingFace configuration
 
 }
 
@@ -424,21 +424,49 @@ func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error)
 	if t.decode == nil || t.tokenizerh == nil {
 		return "", errors.New("decode function is not initialized or tokenizer is not loaded")
 	}
+
+	// Handle empty IDs slice
+	if len(ids) == 0 {
+		return "", nil
+	}
+
 	idsPtr := (*uint32)(unsafe.Pointer(&ids[0]))
 	idLen := uint32(len(ids))
-	var strResult string
-	errCode := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens, &strResult)
+	var cStrPtr unsafe.Pointer
+	errCode := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens, &cStrPtr)
 	if errCode != SUCCESS {
 		lastError := getErrorForCode(errCode)
 		return "", errors.Wrapf(lastError, "failed to decode ids")
 	}
-	defer t.freeString(&strResult)
-	result := (*string)(unsafe.Pointer(&strResult))
-	if result == nil {
-		return "", errors.New("failed to decode ids, result is nil")
-	}
-	return *result, nil
 
+	if cStrPtr == nil {
+		return "", errors.New("decode returned null pointer")
+	}
+
+	// Convert C string to Go string
+	// We need to manually convert from C string to Go string
+	result := goStringFromPtr(cStrPtr)
+
+	// Free the C string
+	t.freeString(cStrPtr)
+
+	return result, nil
+}
+
+// goStringFromPtr converts a C string to a Go string
+func goStringFromPtr(ptr unsafe.Pointer) string {
+	if ptr == nil {
+		return ""
+	}
+	// Calculate string length
+	p := (*byte)(ptr)
+	n := 0
+	for *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(n))) != 0 {
+
+		n++
+	}
+	// Create a Go string from the bytes
+	return string(unsafe.Slice(p, n))
 }
 func (t *Tokenizer) VocabSize() (uint32, error) {
 	if t.vocabSize == nil || t.tokenizerh == nil {

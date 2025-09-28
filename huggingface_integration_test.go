@@ -77,10 +77,10 @@ func TestHFIntegrationPublicModel(t *testing.T) {
 			assert.GreaterOrEqual(t, len(encoding.IDs), tc.minTokens,
 				"%s should produce at least %d tokens", tc.modelID, tc.minTokens)
 
-			// Skip decode test for now due to potential library issues
-			// decoded, err := tok.Decode(encoding.IDs, false)
-			// require.NoError(t, err, "Failed to decode tokens with %s", tc.modelID)
-			// assert.NotEmpty(t, decoded)
+			// Test decode functionality
+			decoded, err := tok.Decode(encoding.IDs, false)
+			require.NoError(t, err, "Failed to decode tokens with %s", tc.modelID)
+			assert.NotEmpty(t, decoded)
 
 			cachePath := getHFCachePath(tempDir, tc.modelID, "main")
 			assert.True(t, fileExists(cachePath), "Model should be cached after download")
@@ -252,10 +252,10 @@ func TestHFIntegrationLargeModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, len(encoding.IDs), 10, "Large model should produce many tokens for long text")
 
-	// Skip decode test for now
-	// decoded, err := tok.Decode(encoding.IDs, false)
-	// require.NoError(t, err)
-	// assert.NotEmpty(t, decoded)
+	// Test decode functionality
+	decoded, err := tok.Decode(encoding.IDs, false)
+	require.NoError(t, err)
+	assert.NotEmpty(t, decoded)
 }
 
 func TestHFIntegrationCacheManagement(t *testing.T) {
