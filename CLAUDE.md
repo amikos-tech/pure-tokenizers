@@ -166,6 +166,8 @@ The library detects and handles:
 - **Linux**: `~/.cache/tokenizers/lib/hf/models/` or `$XDG_CACHE_HOME/tokenizers/lib/hf/models/`
 - **Windows**: `%APPDATA%/tokenizers/lib/hf/models/`
 
+For detailed cache structure and management, see `docs/CACHE_MANAGEMENT.md`.
+
 ## Environment Variables
 
 - `TOKENIZERS_LIB_PATH`: Override library path
