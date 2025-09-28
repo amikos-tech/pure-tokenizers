@@ -26,6 +26,11 @@ const (
 	// HFMaxRetryAfterDelay caps the maximum delay from Retry-After headers
 	// to prevent excessive waits from misconfigured or malicious servers
 	HFMaxRetryAfterDelay = 5 * time.Minute
+
+	// HTTP connection pooling defaults
+	defaultMaxIdleConns        = 100
+	defaultMaxIdleConnsPerHost = 10
+	defaultIdleTimeout         = 90 * time.Second
 )
 
 var (
@@ -61,7 +66,7 @@ func initHFHTTPClient(config *HFConfig) {
 				}
 			}
 			if maxIdleConns == 0 {
-				maxIdleConns = 100 // default
+				maxIdleConns = defaultMaxIdleConns
 			}
 		}
 
@@ -73,7 +78,7 @@ func initHFHTTPClient(config *HFConfig) {
 				}
 			}
 			if maxIdleConnsPerHost == 0 {
-				maxIdleConnsPerHost = 10 // default
+				maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
 			}
 		}
 
@@ -85,7 +90,7 @@ func initHFHTTPClient(config *HFConfig) {
 				}
 			}
 			if idleTimeout == 0 {
-				idleTimeout = 90 * time.Second // default
+				idleTimeout = defaultIdleTimeout
 			}
 		}
 
@@ -130,9 +135,11 @@ type HFConfig struct {
 	OfflineMode bool
 
 	// HTTP client pooling configuration
-	HTTPMaxIdleConns        int           // Maximum number of idle connections across all hosts (default: 100)
-	HTTPMaxIdleConnsPerHost int           // Maximum number of idle connections per host (default: 10)
-	HTTPIdleTimeout         time.Duration // Maximum time to keep idle connections open (default: 90s)
+	// These settings control connection reuse for improved performance.
+	// Config fields take priority over environment variables.
+	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100)
+	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10)
+	HTTPIdleTimeout         time.Duration // How long to keep idle connections open (env: HF_HTTP_IDLE_TIMEOUT, default: 90s)
 }
 
 // FromHuggingFace loads a tokenizer from HuggingFace Hub using the model identifier.

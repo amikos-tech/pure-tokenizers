@@ -520,9 +520,9 @@ func TestHTTPClientInitialization(t *testing.T) {
 	// Check that transport is configured properly
 	transport, ok := client1.Transport.(*http.Transport)
 	assert.True(t, ok, "Transport should be *http.Transport")
-	assert.Equal(t, 100, transport.MaxIdleConns, "MaxIdleConns should be 100")
-	assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 10")
-	assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 90s")
+	assert.Equal(t, defaultMaxIdleConns, transport.MaxIdleConns, "MaxIdleConns should use default")
+	assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should use default")
+	assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "IdleConnTimeout should use default")
 }
 
 func TestConnectionReuse(t *testing.T) {
@@ -932,9 +932,9 @@ func TestHTTPPoolingConfiguration(t *testing.T) {
 		// Should use defaults when env vars are invalid
 		transport, ok := hfHTTPClient.Transport.(*http.Transport)
 		assert.True(t, ok, "Transport should be *http.Transport")
-		assert.Equal(t, 100, transport.MaxIdleConns, "Should use default when env var is invalid")
-		assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "Should use default when env var is invalid")
-		assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "Should use default when env var is invalid")
+		assert.Equal(t, defaultMaxIdleConns, transport.MaxIdleConns, "Should use default when env var is invalid")
+		assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "Should use default when env var is invalid")
+		assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "Should use default when env var is invalid")
 	})
 
 	t.Run("PartialConfigurationUsesDefaults", func(t *testing.T) {
@@ -955,7 +955,7 @@ func TestHTTPPoolingConfiguration(t *testing.T) {
 		transport, ok := hfHTTPClient.Transport.(*http.Transport)
 		assert.True(t, ok, "Transport should be *http.Transport")
 		assert.Equal(t, 150, transport.MaxIdleConns, "Should use config value")
-		assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "Should use default")
-		assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "Should use default")
+		assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "Should use default")
+		assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "Should use default")
 	})
 }
