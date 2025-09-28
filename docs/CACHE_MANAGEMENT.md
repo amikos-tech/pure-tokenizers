@@ -78,6 +78,8 @@ tokenizers/
 
 For environments without internet access, you can pre-populate the cache:
 
+**⚠️ Security Warning**: When manually downloading tokenizers for air-gapped environments, always verify the integrity of the downloaded files. Check file hashes against known good values and download only from trusted sources (official HuggingFace repositories). See the [Verification](#verification) section for examples of integrity checking.
+
 ```bash
 #!/bin/bash
 # Script to pre-populate cache for offline use
