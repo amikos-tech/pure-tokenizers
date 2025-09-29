@@ -293,7 +293,7 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 	}
 
 	// Enable HF cache checking by default unless explicitly disabled
-	if tokenizer.hfConfig.UseLocalCache == false && os.Getenv("HF_USE_LOCAL_CACHE") != "false" {
+	if !tokenizer.hfConfig.UseLocalCache && os.Getenv("HF_USE_LOCAL_CACHE") != "false" {
 		tokenizer.hfConfig.UseLocalCache = true
 	}
 
