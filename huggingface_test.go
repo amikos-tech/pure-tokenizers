@@ -507,8 +507,9 @@ func TestHTTPClientInitialization(t *testing.T) {
 	hfClientOnce = sync.Once{}
 
 	// Get the client multiple times
-	client1 := getHFHTTPClient()
-	client2 := getHFHTTPClient()
+	config := &HFConfig{}
+	client1 := getHFHTTPClient(config)
+	client2 := getHFHTTPClient(config)
 
 	// Should be the same instance
 	assert.Same(t, client1, client2, "Should return the same HTTP client instance")
@@ -519,9 +520,9 @@ func TestHTTPClientInitialization(t *testing.T) {
 	// Check that transport is configured properly
 	transport, ok := client1.Transport.(*http.Transport)
 	assert.True(t, ok, "Transport should be *http.Transport")
-	assert.Equal(t, 100, transport.MaxIdleConns, "MaxIdleConns should be 100")
-	assert.Equal(t, 10, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 10")
-	assert.Equal(t, 90*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 90s")
+	assert.Equal(t, defaultMaxIdleConns, transport.MaxIdleConns, "MaxIdleConns should use default")
+	assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should use default")
+	assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "IdleConnTimeout should use default")
 }
 
 func TestConnectionReuse(t *testing.T) {
@@ -552,17 +553,16 @@ func TestConnectionReuse(t *testing.T) {
 	hfClientOnce = sync.Once{}
 
 	// Initialize client with test TLS config that accepts test certificates
-	initHFHTTPClient()
-	if transport, ok := hfHTTPClient.Transport.(*http.Transport); ok {
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true, // Required for test server's self-signed cert
-		}
-	}
-
 	config := &HFConfig{
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
+	}
+	initHFHTTPClient(config)
+	if transport, ok := hfHTTPClient.Transport.(*http.Transport); ok {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true, // Required for test server's self-signed cert
+		}
 	}
 
 	// Make multiple sequential requests
@@ -822,5 +822,350 @@ func TestFallbackToExponentialBackoff(t *testing.T) {
 		// Second retry: ~2s + jitter (0-500ms)
 		assert.InDelta(t, 2000, receivedDelays[1].Milliseconds(), 750,
 			"Second retry should use exponential backoff with jitter")
+	}
+}
+
+func TestHTTPPoolingConfiguration(t *testing.T) {
+	t.Run("ConfigFieldsOverrideDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		config := &HFConfig{
+			HTTPMaxIdleConns:        200,
+			HTTPMaxIdleConnsPerHost: 20,
+			HTTPIdleTimeout:         120 * time.Second,
+		}
+
+		// Initialize client with custom config
+		initHFHTTPClient(config)
+
+		// Verify custom configuration
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 200, transport.MaxIdleConns, "MaxIdleConns should be 200")
+		assert.Equal(t, 20, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 20")
+		assert.Equal(t, 120*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 120s")
+	})
+
+	t.Run("EnvironmentVariablesOverrideDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "250")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "25")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "2m30s")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		config := &HFConfig{} // Empty config to test env vars
+
+		// Initialize client with env vars
+		initHFHTTPClient(config)
+
+		// Verify environment variable configuration
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 250, transport.MaxIdleConns, "MaxIdleConns should be 250 from env")
+		assert.Equal(t, 25, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be 25 from env")
+		assert.Equal(t, 150*time.Second, transport.IdleConnTimeout, "IdleConnTimeout should be 2m30s from env")
+	})
+
+	t.Run("ConfigFieldsOverrideEnvironmentVariables", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "250")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "25")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "2m30s")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		// Config values should override env vars
+		config := &HFConfig{
+			HTTPMaxIdleConns:        300,
+			HTTPMaxIdleConnsPerHost: 30,
+			HTTPIdleTimeout:         180 * time.Second,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify config overrides env vars
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 300, transport.MaxIdleConns, "Config should override env var")
+		assert.Equal(t, 30, transport.MaxIdleConnsPerHost, "Config should override env var")
+		assert.Equal(t, 180*time.Second, transport.IdleConnTimeout, "Config should override env var")
+	})
+
+	t.Run("InvalidEnvironmentVariablesUseDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set invalid environment variables
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS", "invalid")
+		_ = os.Setenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", "-5")
+		_ = os.Setenv("HF_HTTP_IDLE_TIMEOUT", "not-a-duration")
+		defer func() {
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS")
+			_ = os.Unsetenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST")
+			_ = os.Unsetenv("HF_HTTP_IDLE_TIMEOUT")
+		}()
+
+		config := &HFConfig{} // Empty config
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Should use defaults when env vars are invalid
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, defaultMaxIdleConns, transport.MaxIdleConns, "Should use default when env var is invalid")
+		assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "Should use default when env var is invalid")
+		assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "Should use default when env var is invalid")
+	})
+
+	t.Run("PartialConfigurationUsesDefaults", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Only set one config value
+		config := &HFConfig{
+			HTTPMaxIdleConns: 150,
+			// Other fields left as zero values
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify partial config with defaults
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 150, transport.MaxIdleConns, "Should use config value")
+		assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "Should use default")
+		assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "Should use default")
+	})
+
+	t.Run("ValidationAdjustsInconsistentValues", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set maxIdleConnsPerHost greater than maxIdleConns (illogical)
+		config := &HFConfig{
+			HTTPMaxIdleConns:        5,
+			HTTPMaxIdleConnsPerHost: 20,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify validation adjusted maxIdleConns to be at least maxIdleConnsPerHost
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 20, transport.MaxIdleConns, "MaxIdleConns should be adjusted to match MaxIdleConnsPerHost")
+		assert.Equal(t, 20, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should remain as configured")
+	})
+
+	t.Run("ValidationEnforcesMaximumBounds", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set excessively high values
+		config := &HFConfig{
+			HTTPMaxIdleConns:        2000,
+			HTTPMaxIdleConnsPerHost: 200,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify validation enforced maximum bounds
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, maxAllowedIdleConns, transport.MaxIdleConns, "MaxIdleConns should be capped at maxAllowedIdleConns")
+		assert.Equal(t, maxAllowedIdleConnsPerHost, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be capped at maxAllowedIdleConnsPerHost")
+	})
+}
+
+func TestValidateHTTPPoolingConfig(t *testing.T) {
+	tests := []struct {
+		name                        string
+		inputMaxIdleConns           int
+		inputMaxIdleConnsPerHost    int
+		expectedMaxIdleConns        int
+		expectedMaxIdleConnsPerHost int
+	}{
+		{
+			name:                        "Valid configuration unchanged",
+			inputMaxIdleConns:           100,
+			inputMaxIdleConnsPerHost:    10,
+			expectedMaxIdleConns:        100,
+			expectedMaxIdleConnsPerHost: 10,
+		},
+		{
+			name:                        "Adjusts maxIdleConns when less than maxIdleConnsPerHost",
+			inputMaxIdleConns:           5,
+			inputMaxIdleConnsPerHost:    20,
+			expectedMaxIdleConns:        20,
+			expectedMaxIdleConnsPerHost: 20,
+		},
+		{
+			name:                        "Caps excessive maxIdleConns",
+			inputMaxIdleConns:           2000,
+			inputMaxIdleConnsPerHost:    50,
+			expectedMaxIdleConns:        maxAllowedIdleConns,
+			expectedMaxIdleConnsPerHost: 50,
+		},
+		{
+			name:                        "Caps excessive maxIdleConnsPerHost",
+			inputMaxIdleConns:           500,
+			inputMaxIdleConnsPerHost:    200,
+			expectedMaxIdleConns:        500,
+			expectedMaxIdleConnsPerHost: maxAllowedIdleConnsPerHost,
+		},
+		{
+			name:                        "Caps both when excessive",
+			inputMaxIdleConns:           2000,
+			inputMaxIdleConnsPerHost:    200,
+			expectedMaxIdleConns:        maxAllowedIdleConns,
+			expectedMaxIdleConnsPerHost: maxAllowedIdleConnsPerHost,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			maxIdleConns, maxIdleConnsPerHost := validateHTTPPoolingConfig(tt.inputMaxIdleConns, tt.inputMaxIdleConnsPerHost)
+			assert.Equal(t, tt.expectedMaxIdleConns, maxIdleConns, "maxIdleConns mismatch")
+			assert.Equal(t, tt.expectedMaxIdleConnsPerHost, maxIdleConnsPerHost, "maxIdleConnsPerHost mismatch")
+		})
+	}
+}
+
+func TestGetEnvInt(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		defaultValue int
+		expected     int
+	}{
+		{
+			name:         "Valid positive integer",
+			envValue:     "50",
+			defaultValue: 10,
+			expected:     50,
+		},
+		{
+			name:         "Invalid integer format",
+			envValue:     "not-a-number",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Negative integer",
+			envValue:     "-5",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Zero value",
+			envValue:     "0",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Empty string",
+			envValue:     "",
+			defaultValue: 10,
+			expected:     10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set test environment variable
+			testKey := "TEST_ENV_INT"
+			if tt.envValue != "" {
+				_ = os.Setenv(testKey, tt.envValue)
+				defer func() { _ = os.Unsetenv(testKey) }()
+			}
+
+			result := getEnvInt(testKey, tt.defaultValue)
+			assert.Equal(t, tt.expected, result, "getEnvInt result mismatch")
+		})
+	}
+}
+
+func TestGetEnvDuration(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		defaultValue time.Duration
+		expected     time.Duration
+	}{
+		{
+			name:         "Valid duration seconds",
+			envValue:     "30s",
+			defaultValue: 10 * time.Second,
+			expected:     30 * time.Second,
+		},
+		{
+			name:         "Valid duration minutes",
+			envValue:     "2m30s",
+			defaultValue: 10 * time.Second,
+			expected:     150 * time.Second,
+		},
+		{
+			name:         "Invalid duration format",
+			envValue:     "not-a-duration",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Negative duration",
+			envValue:     "-5s",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Zero duration",
+			envValue:     "0s",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Empty string",
+			envValue:     "",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set test environment variable
+			testKey := "TEST_ENV_DURATION"
+			if tt.envValue != "" {
+				_ = os.Setenv(testKey, tt.envValue)
+				defer func() { _ = os.Unsetenv(testKey) }()
+			}
+
+			result := getEnvDuration(testKey, tt.defaultValue)
+			assert.Equal(t, tt.expected, result, "getEnvDuration result mismatch")
+		})
 	}
 }

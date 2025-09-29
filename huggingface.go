@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -26,6 +27,16 @@ const (
 	// HFMaxRetryAfterDelay caps the maximum delay from Retry-After headers
 	// to prevent excessive waits from misconfigured or malicious servers
 	HFMaxRetryAfterDelay = 5 * time.Minute
+
+	// HTTP connection pooling defaults
+	defaultMaxIdleConns        = 100
+	defaultMaxIdleConnsPerHost = 10
+	defaultIdleTimeout         = 90 * time.Second
+
+	// HTTP connection pooling maximum bounds
+	// These limits prevent resource exhaustion from misconfiguration
+	maxAllowedIdleConns        = 1000 // Maximum total idle connections across all hosts
+	maxAllowedIdleConnsPerHost = 100  // Maximum idle connections per individual host
 )
 
 var (
@@ -49,9 +60,114 @@ func SetLibraryVersion(version string) {
 	}
 }
 
-// initHFHTTPClient initializes the shared HTTP client with connection pooling
-func initHFHTTPClient() {
+// getEnvInt retrieves an integer value from environment variable
+func getEnvInt(key string, defaultValue int) int {
+	if envVal := os.Getenv(key); envVal != "" {
+		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+			return val
+		} else if err != nil {
+			// Always log warning for invalid configuration to help users debug
+			log.Printf("[WARNING] Invalid integer value for %s: '%s' (error: %v), using default: %d\n",
+				key, envVal, err, defaultValue)
+		} else if val <= 0 {
+			// Log warning for non-positive values
+			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
+				key, val, defaultValue)
+		}
+	}
+	return defaultValue
+}
+
+// getEnvDuration retrieves a duration value from environment variable
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if envVal := os.Getenv(key); envVal != "" {
+		if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
+			return val
+		} else if err != nil {
+			// Always log warning for invalid configuration to help users debug
+			log.Printf("[WARNING] Invalid duration value for %s: '%s' (error: %v), using default: %v\n",
+				key, envVal, err, defaultValue)
+		} else if val <= 0 {
+			// Log warning for non-positive durations
+			log.Printf("[WARNING] Non-positive duration for %s: %v, using default: %v\n",
+				key, val, defaultValue)
+		}
+	}
+	return defaultValue
+}
+
+// validateHTTPPoolingConfig validates and adjusts HTTP pooling configuration for logical consistency
+func validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost int) (int, int) {
+	originalMaxIdleConns := maxIdleConns
+	originalMaxIdleConnsPerHost := maxIdleConnsPerHost
+
+	// Ensure maxIdleConns is at least as large as maxIdleConnsPerHost
+	// This is logical since total idle connections should be >= per-host idle connections
+	if maxIdleConns < maxIdleConnsPerHost {
+		maxIdleConns = maxIdleConnsPerHost
+		// Always log this important logical adjustment
+		log.Printf("[WARNING] HTTPMaxIdleConns (%d) was less than HTTPMaxIdleConnsPerHost (%d), adjusted to %d for consistency",
+			originalMaxIdleConns, maxIdleConnsPerHost, maxIdleConns)
+	}
+
+	// Ensure reasonable bounds to prevent resource exhaustion
+	if maxIdleConns > maxAllowedIdleConns {
+		maxIdleConns = maxAllowedIdleConns
+		log.Printf("[WARNING] HTTPMaxIdleConns (%d) exceeds maximum allowed (%d), capped to prevent resource exhaustion",
+			originalMaxIdleConns, maxAllowedIdleConns)
+	}
+	if maxIdleConnsPerHost > maxAllowedIdleConnsPerHost {
+		maxIdleConnsPerHost = maxAllowedIdleConnsPerHost
+		log.Printf("[WARNING] HTTPMaxIdleConnsPerHost (%d) exceeds maximum allowed (%d), capped to prevent resource exhaustion",
+			originalMaxIdleConnsPerHost, maxAllowedIdleConnsPerHost)
+	}
+
+	return maxIdleConns, maxIdleConnsPerHost
+}
+
+// initHFHTTPClient initializes the shared HTTP client with connection pooling.
+// NOTE: Due to thread-safety via sync.Once, configuration changes after the first
+// client initialization will not take effect. The HTTP client is initialized once
+// per process lifetime.
+func initHFHTTPClient(config *HFConfig) {
 	hfClientOnce.Do(func() {
+		// Apply configuration with priority: config fields > env vars > defaults
+		maxIdleConns := config.HTTPMaxIdleConns
+		if maxIdleConns == 0 {
+			maxIdleConns = getEnvInt("HF_HTTP_MAX_IDLE_CONNS", defaultMaxIdleConns)
+		}
+
+		maxIdleConnsPerHost := config.HTTPMaxIdleConnsPerHost
+		if maxIdleConnsPerHost == 0 {
+			maxIdleConnsPerHost = getEnvInt("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", defaultMaxIdleConnsPerHost)
+		}
+
+		// Store original values for logging
+		originalMaxIdleConns := maxIdleConns
+		originalMaxIdleConnsPerHost := maxIdleConnsPerHost
+
+		// Validate and adjust configuration for logical consistency
+		maxIdleConns, maxIdleConnsPerHost = validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost)
+
+		idleTimeout := config.HTTPIdleTimeout
+		if idleTimeout == 0 {
+			idleTimeout = getEnvDuration("HF_HTTP_IDLE_TIMEOUT", defaultIdleTimeout)
+		}
+
+		// Log final configuration in debug mode
+		if os.Getenv("DEBUG") != "" {
+			log.Printf("[DEBUG] HTTP Client Configuration:\n")
+			log.Printf("  MaxIdleConns: %d", maxIdleConns)
+			if originalMaxIdleConns != maxIdleConns {
+				log.Printf("    (adjusted from %d for consistency)", originalMaxIdleConns)
+			}
+			log.Printf("  MaxIdleConnsPerHost: %d", maxIdleConnsPerHost)
+			if originalMaxIdleConnsPerHost != maxIdleConnsPerHost {
+				log.Printf("    (adjusted from %d due to bounds)", originalMaxIdleConnsPerHost)
+			}
+			log.Printf("  IdleTimeout: %v", idleTimeout)
+		}
+
 		transport := &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
@@ -59,12 +175,12 @@ func initHFHTTPClient() {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ForceAttemptHTTP2:   true,
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			// IdleConnTimeout: 90s is suitable for long-running processes that may
+			MaxIdleConns:        maxIdleConns,
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			// IdleConnTimeout is suitable for long-running processes that may
 			// have periods of inactivity between downloads. For short scripts that
 			// exit quickly, connections will be closed automatically on program exit.
-			IdleConnTimeout:       90 * time.Second,
+			IdleConnTimeout:       idleTimeout,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
@@ -78,8 +194,8 @@ func initHFHTTPClient() {
 }
 
 // getHFHTTPClient returns the shared HTTP client for HuggingFace downloads
-func getHFHTTPClient() *http.Client {
-	initHFHTTPClient()
+func getHFHTTPClient(config *HFConfig) *http.Client {
+	initHFHTTPClient(config)
 	return hfHTTPClient
 }
 
@@ -91,6 +207,30 @@ type HFConfig struct {
 	Timeout     time.Duration
 	MaxRetries  int
 	OfflineMode bool
+
+	// HTTP client pooling configuration
+	// These settings control connection reuse for improved performance.
+	// Config fields take priority over environment variables.
+	//
+	// IMPORTANT: The HTTP client is initialized once per process using sync.Once.
+	// Changes to these configuration values after the first HuggingFace download
+	// will NOT take effect. Set these values before any HuggingFace operations.
+	//
+	// Performance trade-offs:
+	// - Higher values: Better connection reuse, reduced latency for subsequent requests, but increased memory usage
+	// - Lower values: Reduced memory footprint, but more connection establishment overhead
+	//
+	// Recommended configurations:
+	// - High-throughput services: Increase HTTPMaxIdleConnsPerHost (e.g., 20-50) for parallel downloads
+	// - Resource-constrained environments: Reduce both values (e.g., 50/5) to minimize memory usage
+	// - Short-lived scripts: Reduce HTTPIdleTimeout (e.g., 10s) to release resources quickly
+	//
+	// Note: HTTPMaxIdleConns will be automatically adjusted to be >= HTTPMaxIdleConnsPerHost for logical consistency
+	//
+	// Debug mode: Set DEBUG=1 environment variable to see actual configuration values being used
+	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100, max: 1000)
+	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10, max: 100)
+	HTTPIdleTimeout         time.Duration // How long to keep idle connections open (env: HF_HTTP_IDLE_TIMEOUT, default: 90s)
 }
 
 // FromHuggingFace loads a tokenizer from HuggingFace Hub using the model identifier.
@@ -305,7 +445,7 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	}
 
 	// Use the shared HTTP client with connection pooling
-	client := getHFHTTPClient()
+	client := getHFHTTPClient(config)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "request failed")

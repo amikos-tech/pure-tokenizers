@@ -176,6 +176,9 @@ For detailed cache structure and management, see `docs/CACHE_MANAGEMENT.md`.
 - `GITHUB_TOKEN` or `GH_TOKEN`: GitHub authentication for API requests
 - `HF_TOKEN`: HuggingFace authentication token for private/gated models
 - `HF_HUB_CACHE`: Override HuggingFace cache directory
+- `HF_HTTP_MAX_IDLE_CONNS`: Maximum number of idle HTTP connections (default: 100)
+- `HF_HTTP_MAX_IDLE_CONNS_PER_HOST`: Maximum idle connections per host (default: 10)
+- `HF_HTTP_IDLE_TIMEOUT`: Idle connection timeout duration, e.g., "2m30s" (default: 90s)
 
 ## Error Handling
 
