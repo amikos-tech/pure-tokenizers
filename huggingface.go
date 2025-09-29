@@ -54,44 +54,65 @@ func SetLibraryVersion(version string) {
 	}
 }
 
+// getEnvInt retrieves an integer value from environment variable
+func getEnvInt(key string, defaultValue int) int {
+	if envVal := os.Getenv(key); envVal != "" {
+		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+			return val
+		}
+	}
+	return defaultValue
+}
+
+// getEnvDuration retrieves a duration value from environment variable
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if envVal := os.Getenv(key); envVal != "" {
+		if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
+			return val
+		}
+	}
+	return defaultValue
+}
+
+// validateHTTPPoolingConfig validates and adjusts HTTP pooling configuration for logical consistency
+func validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost int) (int, int) {
+	// Ensure maxIdleConns is at least as large as maxIdleConnsPerHost
+	// This is logical since total idle connections should be >= per-host idle connections
+	if maxIdleConns < maxIdleConnsPerHost {
+		maxIdleConns = maxIdleConnsPerHost
+	}
+
+	// Ensure reasonable bounds to prevent resource exhaustion
+	if maxIdleConns > 1000 {
+		maxIdleConns = 1000
+	}
+	if maxIdleConnsPerHost > 100 {
+		maxIdleConnsPerHost = 100
+	}
+
+	return maxIdleConns, maxIdleConnsPerHost
+}
+
 // initHFHTTPClient initializes the shared HTTP client with connection pooling
 func initHFHTTPClient(config *HFConfig) {
 	hfClientOnce.Do(func() {
-		// Apply defaults and environment variables for HTTP pooling configuration
+		// Apply configuration with priority: config fields > env vars > defaults
 		maxIdleConns := config.HTTPMaxIdleConns
 		if maxIdleConns == 0 {
-			if envVal := os.Getenv("HF_HTTP_MAX_IDLE_CONNS"); envVal != "" {
-				if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
-					maxIdleConns = val
-				}
-			}
-			if maxIdleConns == 0 {
-				maxIdleConns = defaultMaxIdleConns
-			}
+			maxIdleConns = getEnvInt("HF_HTTP_MAX_IDLE_CONNS", defaultMaxIdleConns)
 		}
 
 		maxIdleConnsPerHost := config.HTTPMaxIdleConnsPerHost
 		if maxIdleConnsPerHost == 0 {
-			if envVal := os.Getenv("HF_HTTP_MAX_IDLE_CONNS_PER_HOST"); envVal != "" {
-				if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
-					maxIdleConnsPerHost = val
-				}
-			}
-			if maxIdleConnsPerHost == 0 {
-				maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
-			}
+			maxIdleConnsPerHost = getEnvInt("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", defaultMaxIdleConnsPerHost)
 		}
+
+		// Validate and adjust configuration for logical consistency
+		maxIdleConns, maxIdleConnsPerHost = validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost)
 
 		idleTimeout := config.HTTPIdleTimeout
 		if idleTimeout == 0 {
-			if envVal := os.Getenv("HF_HTTP_IDLE_TIMEOUT"); envVal != "" {
-				if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
-					idleTimeout = val
-				}
-			}
-			if idleTimeout == 0 {
-				idleTimeout = defaultIdleTimeout
-			}
+			idleTimeout = getEnvDuration("HF_HTTP_IDLE_TIMEOUT", defaultIdleTimeout)
 		}
 
 		transport := &http.Transport{
@@ -137,8 +158,19 @@ type HFConfig struct {
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
 	// Config fields take priority over environment variables.
-	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100)
-	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10)
+	//
+	// Performance trade-offs:
+	// - Higher values: Better connection reuse, reduced latency for subsequent requests, but increased memory usage
+	// - Lower values: Reduced memory footprint, but more connection establishment overhead
+	//
+	// Recommended configurations:
+	// - High-throughput services: Increase HTTPMaxIdleConnsPerHost (e.g., 20-50) for parallel downloads
+	// - Resource-constrained environments: Reduce both values (e.g., 50/5) to minimize memory usage
+	// - Short-lived scripts: Reduce HTTPIdleTimeout (e.g., 10s) to release resources quickly
+	//
+	// Note: HTTPMaxIdleConns will be automatically adjusted to be >= HTTPMaxIdleConnsPerHost for logical consistency
+	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100, max: 1000)
+	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10, max: 100)
 	HTTPIdleTimeout         time.Duration // How long to keep idle connections open (env: HF_HTTP_IDLE_TIMEOUT, default: 90s)
 }
 

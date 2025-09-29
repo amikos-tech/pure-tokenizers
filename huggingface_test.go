@@ -958,4 +958,100 @@ func TestHTTPPoolingConfiguration(t *testing.T) {
 		assert.Equal(t, defaultMaxIdleConnsPerHost, transport.MaxIdleConnsPerHost, "Should use default")
 		assert.Equal(t, defaultIdleTimeout, transport.IdleConnTimeout, "Should use default")
 	})
+
+	t.Run("ValidationAdjustsInconsistentValues", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set maxIdleConnsPerHost greater than maxIdleConns (illogical)
+		config := &HFConfig{
+			HTTPMaxIdleConns:        5,
+			HTTPMaxIdleConnsPerHost: 20,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify validation adjusted maxIdleConns to be at least maxIdleConnsPerHost
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 20, transport.MaxIdleConns, "MaxIdleConns should be adjusted to match MaxIdleConnsPerHost")
+		assert.Equal(t, 20, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should remain as configured")
+	})
+
+	t.Run("ValidationEnforcesMaximumBounds", func(t *testing.T) {
+		// Reset the client
+		hfHTTPClient = nil
+		hfClientOnce = sync.Once{}
+
+		// Set excessively high values
+		config := &HFConfig{
+			HTTPMaxIdleConns:        2000,
+			HTTPMaxIdleConnsPerHost: 200,
+		}
+
+		// Initialize client
+		initHFHTTPClient(config)
+
+		// Verify validation enforced maximum bounds
+		transport, ok := hfHTTPClient.Transport.(*http.Transport)
+		assert.True(t, ok, "Transport should be *http.Transport")
+		assert.Equal(t, 1000, transport.MaxIdleConns, "MaxIdleConns should be capped at 1000")
+		assert.Equal(t, 100, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be capped at 100")
+	})
+}
+
+func TestValidateHTTPPoolingConfig(t *testing.T) {
+	tests := []struct {
+		name                        string
+		inputMaxIdleConns           int
+		inputMaxIdleConnsPerHost    int
+		expectedMaxIdleConns        int
+		expectedMaxIdleConnsPerHost int
+	}{
+		{
+			name:                        "Valid configuration unchanged",
+			inputMaxIdleConns:           100,
+			inputMaxIdleConnsPerHost:    10,
+			expectedMaxIdleConns:        100,
+			expectedMaxIdleConnsPerHost: 10,
+		},
+		{
+			name:                        "Adjusts maxIdleConns when less than maxIdleConnsPerHost",
+			inputMaxIdleConns:           5,
+			inputMaxIdleConnsPerHost:    20,
+			expectedMaxIdleConns:        20,
+			expectedMaxIdleConnsPerHost: 20,
+		},
+		{
+			name:                        "Caps excessive maxIdleConns",
+			inputMaxIdleConns:           2000,
+			inputMaxIdleConnsPerHost:    50,
+			expectedMaxIdleConns:        1000,
+			expectedMaxIdleConnsPerHost: 50,
+		},
+		{
+			name:                        "Caps excessive maxIdleConnsPerHost",
+			inputMaxIdleConns:           500,
+			inputMaxIdleConnsPerHost:    200,
+			expectedMaxIdleConns:        500,
+			expectedMaxIdleConnsPerHost: 100,
+		},
+		{
+			name:                        "Caps both when excessive",
+			inputMaxIdleConns:           2000,
+			inputMaxIdleConnsPerHost:    200,
+			expectedMaxIdleConns:        1000,
+			expectedMaxIdleConnsPerHost: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			maxIdleConns, maxIdleConnsPerHost := validateHTTPPoolingConfig(tt.inputMaxIdleConns, tt.inputMaxIdleConnsPerHost)
+			assert.Equal(t, tt.expectedMaxIdleConns, maxIdleConns, "maxIdleConns mismatch")
+			assert.Equal(t, tt.expectedMaxIdleConnsPerHost, maxIdleConnsPerHost, "maxIdleConnsPerHost mismatch")
+		})
+	}
 }
