@@ -593,17 +593,23 @@ func getHFCacheDir() string {
 	return filepath.Join(baseCache, "hf")
 }
 
-// saveToHFCache saves the tokenizer data to the cache
+// saveToHFCache saves the tokenizer data to the cache with atomic write
 func saveToHFCache(path string, data []byte) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return errors.Wrap(err, "failed to create cache directory")
 	}
 
-	// Write file
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// Use atomic write to prevent race conditions
+	tempPath := path + ".tmp" + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return errors.Wrap(err, "failed to write cache file")
+	}
+
+	// Atomic rename
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath) // Clean up on failure
+		return errors.Wrap(err, "failed to save cache file")
 	}
 
 	return nil
