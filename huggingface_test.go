@@ -997,8 +997,8 @@ func TestHTTPPoolingConfiguration(t *testing.T) {
 		// Verify validation enforced maximum bounds
 		transport, ok := hfHTTPClient.Transport.(*http.Transport)
 		assert.True(t, ok, "Transport should be *http.Transport")
-		assert.Equal(t, 1000, transport.MaxIdleConns, "MaxIdleConns should be capped at 1000")
-		assert.Equal(t, 100, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be capped at 100")
+		assert.Equal(t, maxAllowedIdleConns, transport.MaxIdleConns, "MaxIdleConns should be capped at maxAllowedIdleConns")
+		assert.Equal(t, maxAllowedIdleConnsPerHost, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost should be capped at maxAllowedIdleConnsPerHost")
 	})
 }
 
@@ -1028,7 +1028,7 @@ func TestValidateHTTPPoolingConfig(t *testing.T) {
 			name:                        "Caps excessive maxIdleConns",
 			inputMaxIdleConns:           2000,
 			inputMaxIdleConnsPerHost:    50,
-			expectedMaxIdleConns:        1000,
+			expectedMaxIdleConns:        maxAllowedIdleConns,
 			expectedMaxIdleConnsPerHost: 50,
 		},
 		{
@@ -1036,14 +1036,14 @@ func TestValidateHTTPPoolingConfig(t *testing.T) {
 			inputMaxIdleConns:           500,
 			inputMaxIdleConnsPerHost:    200,
 			expectedMaxIdleConns:        500,
-			expectedMaxIdleConnsPerHost: 100,
+			expectedMaxIdleConnsPerHost: maxAllowedIdleConnsPerHost,
 		},
 		{
 			name:                        "Caps both when excessive",
 			inputMaxIdleConns:           2000,
 			inputMaxIdleConnsPerHost:    200,
-			expectedMaxIdleConns:        1000,
-			expectedMaxIdleConnsPerHost: 100,
+			expectedMaxIdleConns:        maxAllowedIdleConns,
+			expectedMaxIdleConnsPerHost: maxAllowedIdleConnsPerHost,
 		},
 	}
 
@@ -1052,6 +1052,120 @@ func TestValidateHTTPPoolingConfig(t *testing.T) {
 			maxIdleConns, maxIdleConnsPerHost := validateHTTPPoolingConfig(tt.inputMaxIdleConns, tt.inputMaxIdleConnsPerHost)
 			assert.Equal(t, tt.expectedMaxIdleConns, maxIdleConns, "maxIdleConns mismatch")
 			assert.Equal(t, tt.expectedMaxIdleConnsPerHost, maxIdleConnsPerHost, "maxIdleConnsPerHost mismatch")
+		})
+	}
+}
+
+func TestGetEnvInt(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		defaultValue int
+		expected     int
+	}{
+		{
+			name:         "Valid positive integer",
+			envValue:     "50",
+			defaultValue: 10,
+			expected:     50,
+		},
+		{
+			name:         "Invalid integer format",
+			envValue:     "not-a-number",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Negative integer",
+			envValue:     "-5",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Zero value",
+			envValue:     "0",
+			defaultValue: 10,
+			expected:     10,
+		},
+		{
+			name:         "Empty string",
+			envValue:     "",
+			defaultValue: 10,
+			expected:     10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set test environment variable
+			testKey := "TEST_ENV_INT"
+			if tt.envValue != "" {
+				_ = os.Setenv(testKey, tt.envValue)
+				defer func() { _ = os.Unsetenv(testKey) }()
+			}
+
+			result := getEnvInt(testKey, tt.defaultValue)
+			assert.Equal(t, tt.expected, result, "getEnvInt result mismatch")
+		})
+	}
+}
+
+func TestGetEnvDuration(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		defaultValue time.Duration
+		expected     time.Duration
+	}{
+		{
+			name:         "Valid duration seconds",
+			envValue:     "30s",
+			defaultValue: 10 * time.Second,
+			expected:     30 * time.Second,
+		},
+		{
+			name:         "Valid duration minutes",
+			envValue:     "2m30s",
+			defaultValue: 10 * time.Second,
+			expected:     150 * time.Second,
+		},
+		{
+			name:         "Invalid duration format",
+			envValue:     "not-a-duration",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Negative duration",
+			envValue:     "-5s",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Zero duration",
+			envValue:     "0s",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+		{
+			name:         "Empty string",
+			envValue:     "",
+			defaultValue: 10 * time.Second,
+			expected:     10 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set test environment variable
+			testKey := "TEST_ENV_DURATION"
+			if tt.envValue != "" {
+				_ = os.Setenv(testKey, tt.envValue)
+				defer func() { _ = os.Unsetenv(testKey) }()
+			}
+
+			result := getEnvDuration(testKey, tt.defaultValue)
+			assert.Equal(t, tt.expected, result, "getEnvDuration result mismatch")
 		})
 	}
 }

@@ -32,6 +32,11 @@ const (
 	defaultMaxIdleConns        = 100
 	defaultMaxIdleConnsPerHost = 10
 	defaultIdleTimeout         = 90 * time.Second
+
+	// HTTP connection pooling maximum bounds
+	// These limits prevent resource exhaustion from misconfiguration
+	maxAllowedIdleConns        = 1000 // Maximum total idle connections across all hosts
+	maxAllowedIdleConnsPerHost = 100  // Maximum idle connections per individual host
 )
 
 var (
@@ -61,10 +66,13 @@ func getEnvInt(key string, defaultValue int) int {
 		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
 			return val
 		} else if err != nil {
-			// Log warning for invalid integer format
-			if os.Getenv("DEBUG") != "" {
-				log.Printf("[WARNING] Invalid integer value for %s: '%s', using default: %d\n", key, envVal, defaultValue)
-			}
+			// Always log warning for invalid configuration to help users debug
+			log.Printf("[WARNING] Invalid integer value for %s: '%s' (error: %v), using default: %d\n",
+				key, envVal, err, defaultValue)
+		} else if val <= 0 {
+			// Log warning for non-positive values
+			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
+				key, val, defaultValue)
 		}
 	}
 	return defaultValue
@@ -76,10 +84,13 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 		if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
 			return val
 		} else if err != nil {
-			// Log warning for invalid duration format
-			if os.Getenv("DEBUG") != "" {
-				log.Printf("[WARNING] Invalid duration value for %s: '%s', using default: %v\n", key, envVal, defaultValue)
-			}
+			// Always log warning for invalid configuration to help users debug
+			log.Printf("[WARNING] Invalid duration value for %s: '%s' (error: %v), using default: %v\n",
+				key, envVal, err, defaultValue)
+		} else if val <= 0 {
+			// Log warning for non-positive durations
+			log.Printf("[WARNING] Non-positive duration for %s: %v, using default: %v\n",
+				key, val, defaultValue)
 		}
 	}
 	return defaultValue
@@ -87,18 +98,28 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 
 // validateHTTPPoolingConfig validates and adjusts HTTP pooling configuration for logical consistency
 func validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost int) (int, int) {
+	originalMaxIdleConns := maxIdleConns
+	originalMaxIdleConnsPerHost := maxIdleConnsPerHost
+
 	// Ensure maxIdleConns is at least as large as maxIdleConnsPerHost
 	// This is logical since total idle connections should be >= per-host idle connections
 	if maxIdleConns < maxIdleConnsPerHost {
 		maxIdleConns = maxIdleConnsPerHost
+		// Always log this important logical adjustment
+		log.Printf("[WARNING] HTTPMaxIdleConns (%d) was less than HTTPMaxIdleConnsPerHost (%d), adjusted to %d for consistency",
+			originalMaxIdleConns, maxIdleConnsPerHost, maxIdleConns)
 	}
 
 	// Ensure reasonable bounds to prevent resource exhaustion
-	if maxIdleConns > 1000 {
-		maxIdleConns = 1000
+	if maxIdleConns > maxAllowedIdleConns {
+		maxIdleConns = maxAllowedIdleConns
+		log.Printf("[WARNING] HTTPMaxIdleConns (%d) exceeds maximum allowed (%d), capped to prevent resource exhaustion",
+			originalMaxIdleConns, maxAllowedIdleConns)
 	}
-	if maxIdleConnsPerHost > 100 {
-		maxIdleConnsPerHost = 100
+	if maxIdleConnsPerHost > maxAllowedIdleConnsPerHost {
+		maxIdleConnsPerHost = maxAllowedIdleConnsPerHost
+		log.Printf("[WARNING] HTTPMaxIdleConnsPerHost (%d) exceeds maximum allowed (%d), capped to prevent resource exhaustion",
+			originalMaxIdleConnsPerHost, maxAllowedIdleConnsPerHost)
 	}
 
 	return maxIdleConns, maxIdleConnsPerHost
