@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -59,6 +60,11 @@ func getEnvInt(key string, defaultValue int) int {
 	if envVal := os.Getenv(key); envVal != "" {
 		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
 			return val
+		} else if err != nil {
+			// Log warning for invalid integer format
+			if os.Getenv("DEBUG") != "" {
+				log.Printf("[WARNING] Invalid integer value for %s: '%s', using default: %d\n", key, envVal, defaultValue)
+			}
 		}
 	}
 	return defaultValue
@@ -69,6 +75,11 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if envVal := os.Getenv(key); envVal != "" {
 		if val, err := time.ParseDuration(envVal); err == nil && val > 0 {
 			return val
+		} else if err != nil {
+			// Log warning for invalid duration format
+			if os.Getenv("DEBUG") != "" {
+				log.Printf("[WARNING] Invalid duration value for %s: '%s', using default: %v\n", key, envVal, defaultValue)
+			}
 		}
 	}
 	return defaultValue
@@ -93,7 +104,10 @@ func validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost int) (int, int)
 	return maxIdleConns, maxIdleConnsPerHost
 }
 
-// initHFHTTPClient initializes the shared HTTP client with connection pooling
+// initHFHTTPClient initializes the shared HTTP client with connection pooling.
+// NOTE: Due to thread-safety via sync.Once, configuration changes after the first
+// client initialization will not take effect. The HTTP client is initialized once
+// per process lifetime.
 func initHFHTTPClient(config *HFConfig) {
 	hfClientOnce.Do(func() {
 		// Apply configuration with priority: config fields > env vars > defaults
@@ -107,12 +121,30 @@ func initHFHTTPClient(config *HFConfig) {
 			maxIdleConnsPerHost = getEnvInt("HF_HTTP_MAX_IDLE_CONNS_PER_HOST", defaultMaxIdleConnsPerHost)
 		}
 
+		// Store original values for logging
+		originalMaxIdleConns := maxIdleConns
+		originalMaxIdleConnsPerHost := maxIdleConnsPerHost
+
 		// Validate and adjust configuration for logical consistency
 		maxIdleConns, maxIdleConnsPerHost = validateHTTPPoolingConfig(maxIdleConns, maxIdleConnsPerHost)
 
 		idleTimeout := config.HTTPIdleTimeout
 		if idleTimeout == 0 {
 			idleTimeout = getEnvDuration("HF_HTTP_IDLE_TIMEOUT", defaultIdleTimeout)
+		}
+
+		// Log final configuration in debug mode
+		if os.Getenv("DEBUG") != "" {
+			log.Printf("[DEBUG] HTTP Client Configuration:\n")
+			log.Printf("  MaxIdleConns: %d", maxIdleConns)
+			if originalMaxIdleConns != maxIdleConns {
+				log.Printf("    (adjusted from %d for consistency)", originalMaxIdleConns)
+			}
+			log.Printf("  MaxIdleConnsPerHost: %d", maxIdleConnsPerHost)
+			if originalMaxIdleConnsPerHost != maxIdleConnsPerHost {
+				log.Printf("    (adjusted from %d due to bounds)", originalMaxIdleConnsPerHost)
+			}
+			log.Printf("  IdleTimeout: %v", idleTimeout)
 		}
 
 		transport := &http.Transport{
@@ -159,6 +191,10 @@ type HFConfig struct {
 	// These settings control connection reuse for improved performance.
 	// Config fields take priority over environment variables.
 	//
+	// IMPORTANT: The HTTP client is initialized once per process using sync.Once.
+	// Changes to these configuration values after the first HuggingFace download
+	// will NOT take effect. Set these values before any HuggingFace operations.
+	//
 	// Performance trade-offs:
 	// - Higher values: Better connection reuse, reduced latency for subsequent requests, but increased memory usage
 	// - Lower values: Reduced memory footprint, but more connection establishment overhead
@@ -169,6 +205,8 @@ type HFConfig struct {
 	// - Short-lived scripts: Reduce HTTPIdleTimeout (e.g., 10s) to release resources quickly
 	//
 	// Note: HTTPMaxIdleConns will be automatically adjusted to be >= HTTPMaxIdleConnsPerHost for logical consistency
+	//
+	// Debug mode: Set DEBUG=1 environment variable to see actual configuration values being used
 	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100, max: 1000)
 	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10, max: 100)
 	HTTPIdleTimeout         time.Duration // How long to keep idle connections open (env: HF_HTTP_IDLE_TIMEOUT, default: 90s)
