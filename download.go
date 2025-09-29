@@ -274,8 +274,22 @@ func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
 	var releaseURL string
 
 	if version == "latest" || version == "" {
-		releaseURL = fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+		// For latest, we need to find the latest rust-v* release
+		versions, err := GetAvailableVersions()
+		if err != nil {
+			return fmt.Errorf("failed to get available versions: %w", err)
+		}
+		if len(versions) == 0 {
+			return fmt.Errorf("no rust library releases found")
+		}
+		// Use the first one (most recent)
+		version = versions[0]
+		releaseURL = fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, version)
 	} else {
+		// If version doesn't start with rust-v, add it
+		if !strings.HasPrefix(version, "rust-v") {
+			version = "rust-" + version
+		}
 		releaseURL = fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, version)
 	}
 
@@ -417,9 +431,12 @@ func GetAvailableVersions() ([]string, error) {
 		return nil, fmt.Errorf("failed to decode releases JSON: %w", err)
 	}
 
-	versions := make([]string, len(releases))
-	for i, release := range releases {
-		versions[i] = release.TagName
+	// Filter for rust library releases only (rust-v* tags)
+	var versions []string
+	for _, release := range releases {
+		if strings.HasPrefix(release.TagName, "rust-v") {
+			versions = append(versions, release.TagName)
+		}
 	}
 
 	return versions, nil
