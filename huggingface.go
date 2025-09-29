@@ -207,6 +207,10 @@ type HFConfig struct {
 	Timeout     time.Duration
 	MaxRetries  int
 	OfflineMode bool
+	// UseLocalCache enables checking the HuggingFace hub cache before downloading
+	UseLocalCache bool
+	// CacheTTL specifies how long cached tokenizers are considered valid (0 = forever)
+	CacheTTL time.Duration
 
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
@@ -288,17 +292,30 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 		tokenizer.hfConfig.Token = os.Getenv("HF_TOKEN")
 	}
 
-	// Try to load from cache first
+	// Enable HF cache checking by default unless explicitly disabled
+	if tokenizer.hfConfig.UseLocalCache == false && os.Getenv("HF_USE_LOCAL_CACHE") != "false" {
+		tokenizer.hfConfig.UseLocalCache = true
+	}
+
+	// Try cache lookup hierarchy:
+	// 1. Pure-tokenizers cache
 	cachedPath := getHFCachePath(tokenizer.hfConfig.CacheDir, modelID, tokenizer.hfConfig.Revision)
-	if tokenizer.hfConfig.OfflineMode || fileExists(cachedPath) {
-		data, err := os.ReadFile(cachedPath)
-		if err == nil {
+	if data, err := loadFromCacheWithValidation(cachedPath, tokenizer.hfConfig.CacheTTL); err == nil {
+		return FromBytes(data, opts...)
+	}
+
+	// 2. HuggingFace hub cache (if enabled)
+	if tokenizer.hfConfig.UseLocalCache {
+		if data, err := checkHFHubCache(modelID, tokenizer.hfConfig.Revision); err == nil {
+			// Save to our cache for faster future access
+			_ = saveToHFCache(cachedPath, data)
 			return FromBytes(data, opts...)
 		}
-		if tokenizer.hfConfig.OfflineMode {
-			return nil, errors.Wrap(err, "offline mode enabled but tokenizer not found in cache")
-		}
-		// Continue to download if cache read failed
+	}
+
+	// 3. Offline mode check
+	if tokenizer.hfConfig.OfflineMode {
+		return nil, errors.New("offline mode enabled but tokenizer not found in any cache")
 	}
 
 	// Download tokenizer.json from HuggingFace
@@ -682,4 +699,147 @@ func parseRetryAfter(value string) time.Duration {
 		return HFMaxRetryAfterDelay
 	}
 	return duration
+}
+
+// checkHFHubCache checks if tokenizer exists in the standard HuggingFace hub cache
+func checkHFHubCache(modelID, revision string) ([]byte, error) {
+	// Get HuggingFace hub cache directory
+	hubCacheDir := getHFHubCacheDir()
+	if hubCacheDir == "" {
+		return nil, errors.New("HuggingFace hub cache directory not found")
+	}
+
+	// Convert model ID to cache format
+	// HF uses "models--owner--name" format
+	sanitizedModelID := "models--" + strings.ReplaceAll(modelID, "/", "--")
+
+	// Check for snapshot directory
+	snapshotDir := filepath.Join(hubCacheDir, sanitizedModelID, "snapshots")
+	if _, err := os.Stat(snapshotDir); os.IsNotExist(err) {
+		return nil, errors.Errorf("model not found in HF hub cache: %s", modelID)
+	}
+
+	// Look for the specific revision or find the latest
+	var tokenizerPath string
+
+	// First try to find by revision hash
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read snapshots directory")
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Check if this snapshot has tokenizer.json
+		candidatePath := filepath.Join(snapshotDir, entry.Name(), "tokenizer.json")
+		if fileExists(candidatePath) {
+			// If we're looking for a specific revision, check refs
+			if revision != "main" && revision != "" {
+				// Check if this snapshot matches the revision
+				refPath := filepath.Join(hubCacheDir, sanitizedModelID, "refs", revision)
+				if refData, err := os.ReadFile(refPath); err == nil {
+					refHash := strings.TrimSpace(string(refData))
+					if entry.Name() == refHash {
+						tokenizerPath = candidatePath
+						break
+					}
+				}
+			} else {
+				// For main/default, use the most recent snapshot
+				tokenizerPath = candidatePath
+			}
+		}
+	}
+
+	if tokenizerPath == "" {
+		return nil, errors.Errorf("tokenizer.json not found in HF hub cache for %s", modelID)
+	}
+
+	// Read and validate the tokenizer
+	data, err := os.ReadFile(tokenizerPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read tokenizer from HF hub cache")
+	}
+
+	// Validate it's valid JSON
+	var validateJSON map[string]interface{}
+	if err := json.Unmarshal(data, &validateJSON); err != nil {
+		return nil, errors.Wrap(err, "invalid tokenizer.json format in HF hub cache")
+	}
+
+	return data, nil
+}
+
+// getHFHubCacheDir returns the standard HuggingFace hub cache directory
+func getHFHubCacheDir() string {
+	// Check environment variables in order of priority
+	if hfCache := os.Getenv("HF_HUB_CACHE"); hfCache != "" {
+		return hfCache
+	}
+	if hfHome := os.Getenv("HF_HOME"); hfHome != "" {
+		return filepath.Join(hfHome, "hub")
+	}
+	// Default locations
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".cache", "huggingface", "hub")
+	}
+	return ""
+}
+
+// loadFromCacheWithValidation loads tokenizer from cache with optional TTL validation
+func loadFromCacheWithValidation(path string, ttl time.Duration) ([]byte, error) {
+	if !fileExists(path) {
+		return nil, errors.New("cache file not found")
+	}
+
+	// Check if cache is still valid based on TTL
+	if ttl > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to stat cache file")
+		}
+		if time.Since(info.ModTime()) > ttl {
+			return nil, errors.New("cache expired")
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read cache file")
+	}
+
+	// Validate JSON format
+	var validateJSON map[string]interface{}
+	if err := json.Unmarshal(data, &validateJSON); err != nil {
+		return nil, errors.Wrap(err, "invalid cached tokenizer format")
+	}
+
+	return data, nil
+}
+
+// WithHFUseLocalCache enables or disables checking the HuggingFace hub cache
+func WithHFUseLocalCache(useCache bool) TokenizerOption {
+	return func(t *Tokenizer) error {
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		t.hfConfig.UseLocalCache = useCache
+		return nil
+	}
+}
+
+// WithHFCacheTTL sets the cache time-to-live for cached tokenizers
+func WithHFCacheTTL(ttl time.Duration) TokenizerOption {
+	return func(t *Tokenizer) error {
+		if ttl < 0 {
+			return errors.New("cache TTL must be non-negative")
+		}
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		t.hfConfig.CacheTTL = ttl
+		return nil
+	}
 }
