@@ -212,19 +212,7 @@ func setupTestEnvironment(t *testing.T) (string, func()) {
 }
 
 // Skip conditions for environment-specific tests
-func skipIfNoNetwork(t *testing.T) {
-	// Check if we can resolve a DNS name
-	_, err := net.LookupHost("huggingface.co")
-	if err != nil {
-		t.Skip("No network connectivity, skipping network test")
-	}
-}
-
-func skipIfCI(t *testing.T) {
-	if os.Getenv("CI") != "" {
-		t.Skip("Skipping slow test in CI environment")
-	}
-}
+// These functions are kept for potential future use in integration tests
 
 // Unit Tests - Download Logic
 func TestURLConstruction(t *testing.T) {
@@ -312,34 +300,34 @@ func TestAuthenticationHeaderConstruction(t *testing.T) {
 // Unit Tests - Error Handling
 func TestErrorWrapping(t *testing.T) {
 	testCases := []struct {
-		name          string
-		baseError     error
-		expectedType  string
-		isRetryable   bool
+		name         string
+		baseError    error
+		expectedType string
+		isRetryable  bool
 	}{
 		{
-			name:          "Network error",
-			baseError:     &net.OpError{Op: "dial", Err: errors.New("connection refused")},
-			expectedType:  "network",
-			isRetryable:   true,
+			name:         "Network error",
+			baseError:    &net.OpError{Op: "dial", Err: errors.New("connection refused")},
+			expectedType: "network",
+			isRetryable:  true,
 		},
 		{
-			name:          "Timeout error",
-			baseError:     context.DeadlineExceeded,
-			expectedType:  "timeout",
-			isRetryable:   true,
+			name:         "Timeout error",
+			baseError:    context.DeadlineExceeded,
+			expectedType: "timeout",
+			isRetryable:  true,
 		},
 		{
-			name:          "Authentication error",
-			baseError:     fmt.Errorf("authentication required"),
-			expectedType:  "auth",
-			isRetryable:   false,
+			name:         "Authentication error",
+			baseError:    fmt.Errorf("authentication required"),
+			expectedType: "auth",
+			isRetryable:  false,
 		},
 		{
-			name:          "Not found error",
-			baseError:     fmt.Errorf("model not found"),
-			expectedType:  "not_found",
-			isRetryable:   false,
+			name:         "Not found error",
+			baseError:    fmt.Errorf("model not found"),
+			expectedType: "not_found",
+			isRetryable:  false,
 		},
 	}
 
@@ -491,7 +479,7 @@ func TestCacheKeyGeneration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cachePath := getHFCachePath("", tc.modelID, tc.revision)
 			// Check that the path contains the expected key structure
-			assert.Contains(t, cachePath, strings.Replace(tc.expectedKey, "/", string(filepath.Separator), -1))
+			assert.Contains(t, cachePath, strings.ReplaceAll(tc.expectedKey, "/", string(filepath.Separator)))
 		})
 	}
 }
@@ -730,8 +718,8 @@ func TestE2EHuggingFaceWorkflow(t *testing.T) {
 // Helper function
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && s[:len(substr)] == substr ||
-		   len(s) >= len(substr) && s[len(s)-len(substr):] == substr ||
-		   len(substr) < len(s) && findSubstring(s, substr)
+		len(s) >= len(substr) && s[len(s)-len(substr):] == substr ||
+		len(substr) < len(s) && findSubstring(s, substr)
 }
 
 func findSubstring(s, substr string) bool {
@@ -884,4 +872,3 @@ func TestRedirectHandling(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
-
