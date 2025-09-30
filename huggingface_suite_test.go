@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -458,7 +459,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    500 * time.Millisecond, // Very short timeout
-			MaxRetries: 1,                       // Need at least 1 to actually try
+			MaxRetries: 1,                      // Need at least 1 to actually try
 		}
 
 		_, err := downloadTokenizerFromHF("bert-base-uncased", config)
@@ -836,13 +837,20 @@ func TestStreamingDownload(t *testing.T) {
 // Test for file size validation
 func TestFileSizeValidation(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/huge-model/resolve/main/tokenizer.json" {
+		switch r.URL.Path {
+		case "/huge-model/resolve/main/tokenizer.json":
 			// Simulate a suspiciously large tokenizer file
 			w.Header().Set("Content-Length", "1073741824") // 1GB
 			w.WriteHeader(http.StatusOK)
 			// Don't actually send 1GB of data
 			_, _ = w.Write([]byte(`{"error": "file too large"}`))
-		} else {
+		case "/small-model/resolve/main/tokenizer.json":
+			// Simulate a small tokenizer file with correct Content-Length
+			data := []byte(bertTokenizerJSON)
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+		default:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(bertTokenizerJSON))
 		}
@@ -867,8 +875,48 @@ func TestFileSizeValidation(t *testing.T) {
 		assert.Less(t, len(data), 100*1024*1024, "Normal tokenizer should be less than 100MB")
 	})
 
-	// Note: Actual file size validation would be implemented in the download function
-	// This test demonstrates how to test for it
+	t.Run("File exceeding default size limit", func(t *testing.T) {
+		config := &HFConfig{
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    5 * time.Second,
+			MaxRetries: 1,
+		}
+
+		_, err := downloadTokenizerFromHF("huge-model", config)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tokenizer file too large")
+		assert.Contains(t, err.Error(), "1073741824")
+	})
+
+	t.Run("File exceeding custom size limit", func(t *testing.T) {
+		config := &HFConfig{
+			Revision:         "main",
+			CacheDir:         tempDir,
+			Timeout:          5 * time.Second,
+			MaxRetries:       1,
+			MaxTokenizerSize: 500 * 1024 * 1024, // 500MB limit (less than 1GB)
+		}
+
+		_, err := downloadTokenizerFromHF("huge-model", config)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tokenizer file too large")
+		assert.Contains(t, err.Error(), "1073741824")
+	})
+
+	t.Run("File size within custom limit", func(t *testing.T) {
+		config := &HFConfig{
+			Revision:         "main",
+			CacheDir:         tempDir,
+			Timeout:          5 * time.Second,
+			MaxRetries:       1,
+			MaxTokenizerSize: 100 * 1024 * 1024, // 100MB limit
+		}
+
+		data, err := downloadTokenizerFromHF("small-model", config)
+		require.NoError(t, err)
+		assert.NotNil(t, data)
+	})
 }
 
 // Test for disk space errors
