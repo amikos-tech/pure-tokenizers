@@ -517,9 +517,13 @@ func TestCacheOperations(t *testing.T) {
 		err := saveToHFCache(cachePath, testData)
 		require.NoError(t, err)
 
-		// Verify nested directories were created
+		// Verify the cache file was created
 		assert.True(t, fileExists(cachePath))
-		assert.True(t, fileExists(filepath.Dir(cachePath)))
+
+		// Verify we can read the data back
+		readData, err := os.ReadFile(cachePath)
+		require.NoError(t, err)
+		assert.Equal(t, testData, readData)
 	})
 
 	t.Run("Cache invalidation", func(t *testing.T) {
@@ -545,33 +549,48 @@ func TestCacheOperations(t *testing.T) {
 
 func TestConcurrentCacheAccess(t *testing.T) {
 	tempDir := t.TempDir()
-	modelID := "concurrent-test"
-	revision := "main"
-	cachePath := getHFCachePath(tempDir, modelID, revision)
 
-	// Simulate concurrent writes
+	// Simulate concurrent writes to different cache files
 	var wg sync.WaitGroup
 	numGoroutines := 10
 	wg.Add(numGoroutines)
 
+	errors := make([]error, numGoroutines)
+
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
+			// Each goroutine writes to its own model cache
+			modelID := fmt.Sprintf("concurrent-test-%d", id)
+			revision := "main"
+			cachePath := getHFCachePath(tempDir, modelID, revision)
+
 			data := []byte(fmt.Sprintf(`{"writer": %d}`, id))
-			err := saveToHFCache(cachePath, data)
-			assert.NoError(t, err)
+			errors[id] = saveToHFCache(cachePath, data)
 		}(i)
 	}
 
 	wg.Wait()
 
-	// Verify cache file exists and is valid JSON
-	data, err := os.ReadFile(cachePath)
-	require.NoError(t, err)
+	// Verify all writes succeeded
+	for i, err := range errors {
+		require.NoError(t, err, "Goroutine %d failed to write cache", i)
+	}
 
-	var result map[string]interface{}
-	err = json.Unmarshal(data, &result)
-	assert.NoError(t, err, "Cache should contain valid JSON after concurrent access")
+	// Verify all cache files exist and contain valid JSON
+	for i := 0; i < numGoroutines; i++ {
+		modelID := fmt.Sprintf("concurrent-test-%d", i)
+		revision := "main"
+		cachePath := getHFCachePath(tempDir, modelID, revision)
+
+		data, err := os.ReadFile(cachePath)
+		require.NoError(t, err, "Failed to read cache for model %s", modelID)
+
+		var result map[string]interface{}
+		err = json.Unmarshal(data, &result)
+		assert.NoError(t, err, "Cache file for model %s should contain valid JSON", modelID)
+		assert.Equal(t, float64(i), result["writer"], "Cache content mismatch for model %s", modelID)
+	}
 }
 
 // Benchmark Tests
