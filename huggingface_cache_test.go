@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -275,5 +276,308 @@ func TestDualCacheIntegration(t *testing.T) {
 	_ = json.Unmarshal(data, &loaded)
 	if loaded["from"] != "hf-hub-cache" {
 		t.Error("Expected tokenizer from HF hub cache")
+	}
+}
+
+func TestConcurrentCacheAccessSameModel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
+	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
+	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+
+	// Create a mock HF hub cache with tokenizer
+	modelID := "test/concurrent-model"
+	sanitizedID := "models--test--concurrent-model"
+	snapshotHash := "snapshot456"
+
+	snapshotDir := filepath.Join(hfCacheDir, sanitizedID, "snapshots", snapshotHash)
+	_ = os.MkdirAll(snapshotDir, 0755)
+
+	mockTokenizer := map[string]interface{}{
+		"version": "1.0",
+		"model":   map[string]interface{}{"type": "BPE"},
+	}
+	tokenizerData, _ := json.Marshal(mockTokenizer)
+	_ = os.WriteFile(filepath.Join(snapshotDir, "tokenizer.json"), tokenizerData, 0644)
+
+	refsDir := filepath.Join(hfCacheDir, sanitizedID, "refs")
+	_ = os.MkdirAll(refsDir, 0755)
+	_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
+
+	// Test concurrent access to the same model
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, 10)
+	successCount := 0
+	var mu sync.Mutex
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, err := checkHFHubCache(modelID, "main")
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			if data == nil {
+				errorsChan <- nil
+				return
+			}
+			mu.Lock()
+			successCount++
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	for err := range errorsChan {
+		if err != nil {
+			t.Errorf("Concurrent access error: %v", err)
+		} else {
+			t.Error("Concurrent access returned nil data")
+		}
+	}
+
+	if successCount != 10 {
+		t.Errorf("Expected 10 successful accesses, got %d", successCount)
+	}
+}
+
+func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
+	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
+	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+
+	// Create multiple model caches
+	models := []string{"test/model-1", "test/model-2", "test/model-3"}
+	for _, modelID := range models {
+		sanitizedID := "models--test--" + modelID[5:]
+		snapshotHash := "snapshot-" + modelID[5:]
+
+		snapshotDir := filepath.Join(hfCacheDir, sanitizedID, "snapshots", snapshotHash)
+		_ = os.MkdirAll(snapshotDir, 0755)
+
+		mockTokenizer := map[string]interface{}{
+			"version": "1.0",
+			"model":   map[string]interface{}{"type": "BPE"},
+			"id":      modelID,
+		}
+		tokenizerData, _ := json.Marshal(mockTokenizer)
+		_ = os.WriteFile(filepath.Join(snapshotDir, "tokenizer.json"), tokenizerData, 0644)
+
+		refsDir := filepath.Join(hfCacheDir, sanitizedID, "refs")
+		_ = os.MkdirAll(refsDir, 0755)
+		_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
+	}
+
+	// Test concurrent access to different models
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, len(models)*3)
+	results := make(map[string]int)
+	var mu sync.Mutex
+
+	for _, modelID := range models {
+		for j := 0; j < 3; j++ {
+			wg.Add(1)
+			model := modelID
+			go func() {
+				defer wg.Done()
+				data, err := checkHFHubCache(model, "main")
+				if err != nil {
+					errorsChan <- err
+					return
+				}
+				if data == nil {
+					errorsChan <- nil
+					return
+				}
+
+				var loaded map[string]interface{}
+				_ = json.Unmarshal(data, &loaded)
+				mu.Lock()
+				results[model]++
+				mu.Unlock()
+			}()
+		}
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	for err := range errorsChan {
+		if err != nil {
+			t.Errorf("Concurrent access error: %v", err)
+		} else {
+			t.Error("Concurrent access returned nil data")
+		}
+	}
+
+	for _, modelID := range models {
+		if count := results[modelID]; count != 3 {
+			t.Errorf("Model %s: expected 3 successful accesses, got %d", modelID, count)
+		}
+	}
+}
+
+func TestConcurrentCacheReadWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+
+	mockTokenizer := map[string]interface{}{
+		"version": "1.0",
+		"model":   map[string]interface{}{"type": "BPE"},
+	}
+	tokenizerData, _ := json.Marshal(mockTokenizer)
+	cachePath := filepath.Join(tmpDir, "tokenizer.json")
+	_ = os.WriteFile(cachePath, tokenizerData, 0644)
+
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, 20)
+	readCount := 0
+	var mu sync.Mutex
+
+	// Concurrent reads
+	for i := 0; i < 15; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, err := loadFromCacheWithValidation(cachePath, 0)
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			if data == nil {
+				errorsChan <- nil
+				return
+			}
+			mu.Lock()
+			readCount++
+			mu.Unlock()
+		}()
+	}
+
+	// Concurrent writes (updating modtime)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			newTime := time.Now()
+			err := os.Chtimes(cachePath, newTime, newTime)
+			if err != nil {
+				errorsChan <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	for err := range errorsChan {
+		if err != nil {
+			t.Errorf("Concurrent read/write error: %v", err)
+		} else {
+			t.Error("Concurrent read returned nil data")
+		}
+	}
+
+	if readCount != 15 {
+		t.Errorf("Expected 15 successful reads, got %d", readCount)
+	}
+}
+
+func TestConcurrentCacheValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
+	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
+	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+
+	modelID := "test/validation-model"
+	sanitizedID := "models--test--validation-model"
+	snapshotHash := "snapshot789"
+
+	snapshotDir := filepath.Join(hfCacheDir, sanitizedID, "snapshots", snapshotHash)
+	_ = os.MkdirAll(snapshotDir, 0755)
+
+	mockTokenizer := map[string]interface{}{
+		"version": "1.0",
+		"model":   map[string]interface{}{"type": "BPE"},
+	}
+	tokenizerData, _ := json.Marshal(mockTokenizer)
+	tokenizerPath := filepath.Join(snapshotDir, "tokenizer.json")
+	_ = os.WriteFile(tokenizerPath, tokenizerData, 0644)
+
+	refsDir := filepath.Join(hfCacheDir, sanitizedID, "refs")
+	_ = os.MkdirAll(refsDir, 0755)
+	_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
+
+	// Test concurrent validation of the same cache entry
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, 10)
+	validCount := 0
+	var mu sync.Mutex
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, err := checkHFHubCache(modelID, "main")
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			if data == nil {
+				errorsChan <- nil
+				return
+			}
+
+			// Validate the data
+			var loaded map[string]interface{}
+			if err := json.Unmarshal(data, &loaded); err != nil {
+				errorsChan <- err
+				return
+			}
+
+			if loaded["version"] != "1.0" {
+				errorsChan <- nil
+				return
+			}
+
+			mu.Lock()
+			validCount++
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	for err := range errorsChan {
+		if err != nil {
+			t.Errorf("Concurrent validation error: %v", err)
+		} else {
+			t.Error("Concurrent validation failed")
+		}
+	}
+
+	if validCount != 10 {
+		t.Errorf("Expected 10 successful validations, got %d", validCount)
 	}
 }
