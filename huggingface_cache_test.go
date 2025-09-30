@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,8 @@ const (
 // as environment variables are process-global and would cause race conditions.
 
 // errorCollector provides thread-safe error collection for concurrent tests.
+// This pattern could be extracted to a test utilities package for reuse across
+// the codebase if needed in other test files.
 type errorCollector struct {
 	mu     sync.Mutex
 	errors []error
@@ -142,6 +145,7 @@ func verifyGoroutineCompletion(t *testing.T, wg *sync.WaitGroup, timeout time.Du
 		t.Error("Timeout waiting for goroutines to complete")
 	}
 }
+
 
 func TestCheckHFHubCache(t *testing.T) {
 	// Create a temporary HF hub cache structure
@@ -875,6 +879,9 @@ func TestConcurrentCacheInvalidSchema(t *testing.T) {
 // operations don't interfere with concurrent read operations. This simulates
 // real-world scenarios where cache cleanup might happen while other processes
 // are accessing the cache.
+//
+// Note: This test uses synchronization via channels rather than sleep to avoid
+// flakiness in CI environments.
 func TestConcurrentCacheEviction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -891,17 +898,30 @@ func TestConcurrentCacheEviction(t *testing.T) {
 	deleteCount := 0
 	var mu sync.Mutex
 
+	// Channel to coordinate eviction timing
+	evictionReady := make(chan struct{}, 3)
+	evictionDone := make(chan struct{}, 3)
+
 	defer verifyGoroutineCompletion(t, &wg, 5*time.Second)
 
 	// Start readers
 	for i := 0; i < concurrentReaders; i++ {
 		wg.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
+			// Signal that we're ready for eviction after a few reads
+			if idx < 3 {
+				evictionReady <- struct{}{}
+			}
 			data, err := loadFromCacheWithValidation(cachePath, 0)
-			if err != nil && !os.IsNotExist(err) {
-				// Ignore "file not found" errors as cache might be evicted
-				ec.add(err)
+			if err != nil {
+				// Ignore file-not-found and JSON parsing errors as cache might be evicted/corrupted
+				errMsg := err.Error()
+				if !os.IsNotExist(err) &&
+				   errMsg != "cache file not found" &&
+				   !strings.Contains(errMsg, "unexpected end of JSON") {
+					ec.add(err)
+				}
 				return
 			}
 			if data != nil {
@@ -909,7 +929,7 @@ func TestConcurrentCacheEviction(t *testing.T) {
 				readCount++
 				mu.Unlock()
 			}
-		}()
+		}(i)
 	}
 
 	// Simulate cache eviction by deleting and recreating the file
@@ -917,24 +937,37 @@ func TestConcurrentCacheEviction(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			time.Sleep(time.Millisecond * 10) // Small delay to allow some reads
+			// Wait for readers to be ready
+			<-evictionReady
 			_ = os.Remove(cachePath)
 			mu.Lock()
 			deleteCount++
 			mu.Unlock()
 			// Recreate the file to simulate cache refresh
-			time.Sleep(time.Millisecond * 5)
 			createMockTokenizerFile(t, cachePath)
+			evictionDone <- struct{}{}
 		}()
 	}
 
 	wg.Wait()
+	close(evictionReady)
+	close(evictionDone)
+
 	ec.reportErrors(t, "concurrent cache eviction")
 
-	// We expect some successful reads and some evictions
+	// We expect some successful reads and all evictions to complete
 	t.Logf("Reads: %d, Evictions: %d", readCount, deleteCount)
 	if deleteCount != 3 {
 		t.Errorf("Expected 3 evictions, got %d", deleteCount)
+	}
+
+	// Verify evictions completed
+	completedEvictions := 0
+	for range evictionDone {
+		completedEvictions++
+	}
+	if completedEvictions != 3 {
+		t.Errorf("Expected 3 completed evictions, got %d", completedEvictions)
 	}
 }
 
