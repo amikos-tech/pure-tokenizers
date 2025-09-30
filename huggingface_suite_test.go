@@ -76,11 +76,12 @@ func newMockHFServer(t *testing.T) *MockHFServer {
 	m.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		m.requestLog = append(m.requestLog, r.URL.Path)
+		delay := m.responseDelay
 		m.mu.Unlock()
 
 		// Simulate response delay
-		if m.responseDelay > 0 {
-			time.Sleep(m.responseDelay)
+		if delay > 0 {
+			time.Sleep(delay)
 		}
 
 		// Handle different test scenarios
@@ -147,9 +148,15 @@ func (m *MockHFServer) handleRateLimited(w http.ResponseWriter, r *http.Request)
 }
 
 func (m *MockHFServer) handleRedirect(w http.ResponseWriter, r *http.Request) {
-	if m.simulateRedirect {
-		http.Redirect(w, r, "/bert-base-uncased/resolve/main/tokenizer.json", http.StatusMovedPermanently)
+	m.mu.Lock()
+	shouldRedirect := m.simulateRedirect
+	if shouldRedirect {
 		m.simulateRedirect = false
+	}
+	m.mu.Unlock()
+
+	if shouldRedirect {
+		http.Redirect(w, r, "/bert-base-uncased/resolve/main/tokenizer.json", http.StatusMovedPermanently)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -203,6 +210,18 @@ func (m *MockHFServer) ResetCounters() {
 	atomic.StoreInt32(&m.rateLimitCount, 0)
 	m.mu.Lock()
 	m.requestLog = make([]string, 0)
+	m.mu.Unlock()
+}
+
+func (m *MockHFServer) SetResponseDelay(delay time.Duration) {
+	m.mu.Lock()
+	m.responseDelay = delay
+	m.mu.Unlock()
+}
+
+func (m *MockHFServer) SetSimulateRedirect(redirect bool) {
+	m.mu.Lock()
+	m.simulateRedirect = redirect
 	m.mu.Unlock()
 }
 
@@ -433,7 +452,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 
 	t.Run("Timeout handling", func(t *testing.T) {
 		mockServer.ResetCounters()
-		mockServer.responseDelay = 2 * time.Second
+		mockServer.SetResponseDelay(2 * time.Second)
 
 		config := &HFConfig{
 			Revision:   "main",
@@ -450,7 +469,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 			containsSubstring(err.Error(), "deadline"),
 			"Expected timeout error, got: %v", err)
 
-		mockServer.responseDelay = 0 // Reset delay
+		mockServer.SetResponseDelay(0) // Reset delay
 	})
 }
 
@@ -884,7 +903,7 @@ func TestRedirectHandling(t *testing.T) {
 	HFHubBaseURL = mockServer.URL
 
 	t.Run("Handle HTTP redirect", func(t *testing.T) {
-		mockServer.simulateRedirect = true
+		mockServer.SetSimulateRedirect(true)
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
