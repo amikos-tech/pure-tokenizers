@@ -553,6 +553,8 @@ func TestCacheOperations(t *testing.T) {
 }
 
 func TestConcurrentCacheAccess(t *testing.T) {
+	t.Parallel() // Safe to run in parallel since each goroutine writes to its own cache file
+
 	tempDir := t.TempDir()
 
 	// Simulate concurrent writes to different cache files
@@ -613,6 +615,8 @@ func TestConcurrentCacheAccess(t *testing.T) {
 
 // Benchmark Tests
 func BenchmarkFromHuggingFaceWithCache(b *testing.B) {
+	b.StopTimer() // Don't time setup
+
 	// Create mock server - benchmark functions need a special approach
 	mockServer := &MockHFServer{
 		requestLog: make([]string, 0),
@@ -633,14 +637,7 @@ func BenchmarkFromHuggingFaceWithCache(b *testing.B) {
 	cachePath := getHFCachePath(tempDir, modelID, "main")
 	_ = saveToHFCache(cachePath, []byte(bertTokenizerJSON))
 
-	// config is not used in this benchmark, just reading from cache
-	_ = &HFConfig{
-		Revision: "main",
-		CacheDir: tempDir,
-		Timeout:  5 * time.Second,
-	}
-
-	b.ResetTimer()
+	b.StartTimer() // Start timing
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		data, err := loadFromCache(cachePath)
@@ -757,20 +754,9 @@ func TestE2EHuggingFaceWorkflow(t *testing.T) {
 	assert.False(t, fileExists(cachePath), "Cache file should be removed")
 }
 
-// Helper function
+// Helper function for case-insensitive substring matching
 func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && s[:len(substr)] == substr ||
-		len(s) >= len(substr) && s[len(s)-len(substr):] == substr ||
-		len(substr) < len(s) && findSubstring(s, substr)
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 func buildHFDownloadURL(modelID string, config *HFConfig) string {
