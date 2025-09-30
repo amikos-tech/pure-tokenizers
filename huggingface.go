@@ -64,38 +64,41 @@ func SetLibraryVersion(version string) {
 	}
 }
 
+// getEnvIntValue is a generic helper for parsing integer environment variables
+func getEnvIntValue[T int | int64](key string, defaultValue T, parser func(string) (T, error)) T {
+	envVal := os.Getenv(key)
+	if envVal == "" {
+		return defaultValue
+	}
+
+	val, err := parser(envVal)
+	if err != nil {
+		log.Printf("[WARNING] Invalid integer value for %s: '%s' (error: %v), using default: %v\n",
+			key, envVal, err, defaultValue)
+		return defaultValue
+	}
+
+	if val <= 0 {
+		log.Printf("[WARNING] Non-positive value for %s: %v, using default: %v\n",
+			key, val, defaultValue)
+		return defaultValue
+	}
+
+	return val
+}
+
 // getEnvInt retrieves an integer value from environment variable
 func getEnvInt(key string, defaultValue int) int {
-	if envVal := os.Getenv(key); envVal != "" {
-		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
-			return val
-		} else if err != nil {
-			// Always log warning for invalid configuration to help users debug
-			log.Printf("[WARNING] Invalid integer value for %s: '%s' (error: %v), using default: %d\n",
-				key, envVal, err, defaultValue)
-		} else if val <= 0 {
-			// Log warning for non-positive values
-			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
-				key, val, defaultValue)
-		}
-	}
-	return defaultValue
+	return getEnvIntValue(key, defaultValue, func(s string) (int, error) {
+		return strconv.Atoi(s)
+	})
 }
 
 // getEnvInt64 retrieves an int64 value from environment variable
 func getEnvInt64(key string, defaultValue int64) int64 {
-	if envVal := os.Getenv(key); envVal != "" {
-		if val, err := strconv.ParseInt(envVal, 10, 64); err == nil && val > 0 {
-			return val
-		} else if err != nil {
-			log.Printf("[WARNING] Invalid int64 value for %s: '%s' (error: %v), using default: %d\n",
-				key, envVal, err, defaultValue)
-		} else if val <= 0 {
-			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
-				key, val, defaultValue)
-		}
-	}
-	return defaultValue
+	return getEnvIntValue(key, defaultValue, func(s string) (int64, error) {
+		return strconv.ParseInt(s, 10, 64)
+	})
 }
 
 // getEnvDuration retrieves a duration value from environment variable
@@ -231,8 +234,11 @@ type HFConfig struct {
 	UseLocalCache bool
 	// CacheTTL specifies how long cached tokenizers are considered valid (0 = forever)
 	CacheTTL time.Duration
-	// MaxTokenizerSize is the maximum allowed size for tokenizer files in bytes (env: HF_MAX_TOKENIZER_SIZE, default: 500MB)
-	// Set to 0 to use default/environment value
+	// MaxTokenizerSize is the maximum allowed size for tokenizer files in bytes
+	// (env: HF_MAX_TOKENIZER_SIZE, default: 500MB).
+	// When set to 0 (zero value), falls back to HF_MAX_TOKENIZER_SIZE environment variable,
+	// or DefaultMaxTokenizerSize (500MB) if the environment variable is not set.
+	// Use WithHFMaxTokenizerSize to explicitly set this value.
 	MaxTokenizerSize int64
 
 	// HTTP client pooling configuration
