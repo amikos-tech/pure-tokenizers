@@ -25,6 +25,7 @@ const (
 	ErrCStringConversionFailed = -12
 	ErrInvalidIDs              = -13
 	ErrInvalidOptions          = -14
+	ErrTokenizerTooLarge       = -15
 )
 
 // AbiCompatibilityConstraint defines the required version range for ABI compatibility.

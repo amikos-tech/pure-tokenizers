@@ -28,6 +28,10 @@ const (
 	// to prevent excessive waits from misconfigured or malicious servers
 	HFMaxRetryAfterDelay = 5 * time.Minute
 
+	// DefaultMaxTokenizerSize is the default maximum size for tokenizer files (500MB)
+	// This prevents OOM errors from excessively large downloads
+	DefaultMaxTokenizerSize = 500 * 1024 * 1024
+
 	// HTTP connection pooling defaults
 	defaultMaxIdleConns        = 100
 	defaultMaxIdleConnsPerHost = 10
@@ -71,6 +75,22 @@ func getEnvInt(key string, defaultValue int) int {
 				key, envVal, err, defaultValue)
 		} else if val <= 0 {
 			// Log warning for non-positive values
+			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
+				key, val, defaultValue)
+		}
+	}
+	return defaultValue
+}
+
+// getEnvInt64 retrieves an int64 value from environment variable
+func getEnvInt64(key string, defaultValue int64) int64 {
+	if envVal := os.Getenv(key); envVal != "" {
+		if val, err := strconv.ParseInt(envVal, 10, 64); err == nil && val > 0 {
+			return val
+		} else if err != nil {
+			log.Printf("[WARNING] Invalid int64 value for %s: '%s' (error: %v), using default: %d\n",
+				key, envVal, err, defaultValue)
+		} else if val <= 0 {
 			log.Printf("[WARNING] Non-positive value for %s: %d, using default: %d\n",
 				key, val, defaultValue)
 		}
@@ -211,6 +231,9 @@ type HFConfig struct {
 	UseLocalCache bool
 	// CacheTTL specifies how long cached tokenizers are considered valid (0 = forever)
 	CacheTTL time.Duration
+	// MaxTokenizerSize is the maximum allowed size for tokenizer files in bytes (env: HF_MAX_TOKENIZER_SIZE, default: 500MB)
+	// Set to 0 to use default/environment value
+	MaxTokenizerSize int64
 
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
@@ -393,6 +416,21 @@ func WithHFOfflineMode(offline bool) TokenizerOption {
 	}
 }
 
+// WithHFMaxTokenizerSize sets the maximum allowed size for tokenizer files in bytes
+// Default is 500MB. Set to a very large value to effectively disable size validation.
+func WithHFMaxTokenizerSize(maxSize int64) TokenizerOption {
+	return func(t *Tokenizer) error {
+		if maxSize < 0 {
+			return errors.New("max tokenizer size must be non-negative")
+		}
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		t.hfConfig.MaxTokenizerSize = maxSize
+		return nil
+	}
+}
+
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
 func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, config.Revision)
@@ -507,6 +545,24 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 		return nil, resp, errors.New("rate limited: too many requests")
 	default:
 		return nil, resp, errors.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Validate file size before downloading
+	maxSize := config.MaxTokenizerSize
+	if maxSize == 0 {
+		maxSize = getEnvInt64("HF_MAX_TOKENIZER_SIZE", DefaultMaxTokenizerSize)
+	}
+
+	if maxSize > 0 && resp.ContentLength > 0 {
+		if resp.ContentLength > maxSize {
+			return nil, resp, errors.Errorf("tokenizer file too large: %d bytes exceeds maximum %d bytes", resp.ContentLength, maxSize)
+		}
+
+		// Log warning in DEBUG mode if file is large (>100MB)
+		if os.Getenv("DEBUG") != "" && resp.ContentLength > 100*1024*1024 {
+			log.Printf("[DEBUG] Downloading large tokenizer file: %d bytes (%.1f MB)",
+				resp.ContentLength, float64(resp.ContentLength)/(1024*1024))
+		}
 	}
 
 	// Read response body
