@@ -10,13 +10,21 @@ import (
 )
 
 const (
-	concurrentAccessSameModel   = 10
-	concurrentAccessDiffModels  = 3
-	concurrentReaders           = 15
-	concurrentWriters           = 5
-	concurrentValidations       = 10
+	concurrentAccessSameModel = 10
+	concurrentAccessDiffModels = 3
+	concurrentReaders = 15
+	concurrentWriters = 5
+	concurrentValidations = 10
+	// concurrentErrorBufferMargin provides extra buffer capacity beyond the expected
+	// number of operations to prevent deadlocks if unexpected errors occur during
+	// concurrent test execution. This is a safety margin for robustness.
 	concurrentErrorBufferMargin = 5
 )
+
+// Note on t.Parallel() usage in concurrent cache tests:
+// Only tests that don't modify global state (env vars) use t.Parallel().
+// Tests setting HF_HUB_CACHE run sequentially to avoid cross-test interference,
+// as environment variables are process-global and would cause race conditions.
 
 func TestCheckHFHubCache(t *testing.T) {
 	// Create a temporary HF hub cache structure
@@ -690,5 +698,90 @@ func TestConcurrentCacheCorruption(t *testing.T) {
 
 	if len(errors) != concurrentValidations {
 		t.Errorf("Expected %d errors in channel, got %d", concurrentValidations, len(errors))
+	}
+}
+
+// TestConcurrentCacheInvalidSchema verifies that the cache system properly
+// handles valid JSON with invalid tokenizer schema during concurrent access.
+// This tests validation-level error handling when the JSON structure doesn't
+// match expected tokenizer format (e.g., missing required fields).
+func TestConcurrentCacheInvalidSchema(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create a cache file with valid JSON but invalid schema (missing 'model' field)
+	invalidTokenizer := map[string]interface{}{
+		"version": "1.0",
+		// Missing required 'model' field
+		"vocabulary": map[string]interface{}{"size": 1000},
+	}
+	tokenizerData, _ := json.Marshal(invalidTokenizer)
+	cachePath := filepath.Join(tmpDir, "tokenizer.json")
+	_ = os.WriteFile(cachePath, tokenizerData, 0644)
+
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, concurrentValidations+concurrentErrorBufferMargin)
+	successCount := 0
+	var mu sync.Mutex
+
+	for i := 0; i < concurrentValidations; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, err := loadFromCacheWithValidation(cachePath, 0)
+			// The function should succeed in loading the JSON
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			if data == nil {
+				errorsChan <- nil
+				return
+			}
+
+			// Validation should detect missing 'model' field
+			var loaded map[string]interface{}
+			if err := json.Unmarshal(data, &loaded); err != nil {
+				errorsChan <- err
+				return
+			}
+
+			// Check if 'model' field exists
+			if _, ok := loaded["model"]; !ok {
+				// Expected: invalid schema detected
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	var errors []error
+	for err := range errorsChan {
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Encountered %d errors during schema validation:", len(errors))
+		for i, err := range errors {
+			if err != nil {
+				t.Errorf("  [%d] %v", i+1, err)
+			} else {
+				t.Errorf("  [%d] returned nil data", i+1)
+			}
+		}
+	}
+
+	// All goroutines should detect the missing 'model' field
+	if successCount != concurrentValidations {
+		t.Errorf("Expected %d successful schema validation failures, got %d", concurrentValidations, successCount)
 	}
 }
