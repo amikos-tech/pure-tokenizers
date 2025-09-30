@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+const (
+	concurrentAccessSameModel   = 10
+	concurrentAccessDiffModels  = 3
+	concurrentReaders           = 15
+	concurrentWriters           = 5
+	concurrentValidations       = 10
+	concurrentErrorBufferMargin = 5
+)
+
 func TestCheckHFHubCache(t *testing.T) {
 	// Create a temporary HF hub cache structure
 	tmpDir := t.TempDir()
@@ -279,6 +288,10 @@ func TestDualCacheIntegration(t *testing.T) {
 	}
 }
 
+// TestConcurrentCacheAccessSameModel verifies that multiple goroutines can
+// safely read from the cache when accessing the same model simultaneously.
+// This tests the idempotent nature of cache reads and validates that no
+// race conditions occur during concurrent file system reads.
 func TestConcurrentCacheAccessSameModel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -308,13 +321,12 @@ func TestConcurrentCacheAccessSameModel(t *testing.T) {
 	_ = os.MkdirAll(refsDir, 0755)
 	_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
 
-	// Test concurrent access to the same model
 	var wg sync.WaitGroup
-	errorsChan := make(chan error, 10)
+	errorsChan := make(chan error, concurrentAccessSameModel+concurrentErrorBufferMargin)
 	successCount := 0
 	var mu sync.Mutex
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < concurrentAccessSameModel; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -352,11 +364,15 @@ func TestConcurrentCacheAccessSameModel(t *testing.T) {
 		}
 	}
 
-	if successCount != 10 {
-		t.Errorf("Expected 10 successful accesses, got %d", successCount)
+	if successCount != concurrentAccessSameModel {
+		t.Errorf("Expected %d successful accesses, got %d", concurrentAccessSameModel, successCount)
 	}
 }
 
+// TestConcurrentCacheAccessDifferentModels verifies that multiple goroutines
+// can safely access different models from the cache simultaneously without
+// interfering with each other. This validates that the cache lookup mechanism
+// correctly isolates different model accesses and prevents cross-contamination.
 func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -389,14 +405,14 @@ func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
 	}
 
-	// Test concurrent access to different models
 	var wg sync.WaitGroup
-	errorsChan := make(chan error, len(models)*3)
+	totalOps := len(models) * concurrentAccessDiffModels
+	errorsChan := make(chan error, totalOps+concurrentErrorBufferMargin)
 	results := make(map[string]int)
 	var mu sync.Mutex
 
 	for _, modelID := range models {
-		for j := 0; j < 3; j++ {
+		for j := 0; j < concurrentAccessDiffModels; j++ {
 			wg.Add(1)
 			model := modelID
 			go func() {
@@ -440,16 +456,21 @@ func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
 	}
 
 	for _, modelID := range models {
-		if count := results[modelID]; count != 3 {
-			t.Errorf("Model %s: expected 3 successful accesses, got %d", modelID, count)
+		if count := results[modelID]; count != concurrentAccessDiffModels {
+			t.Errorf("Model %s: expected %d successful accesses, got %d", modelID, concurrentAccessDiffModels, count)
 		}
 	}
 }
 
+// TestConcurrentCacheReadWrite verifies that concurrent read and write
+// operations on cache files don't cause race conditions or data corruption.
+// This simulates real-world scenarios where cache metadata (modification times)
+// may be updated while other processes are reading the cache.
 func TestConcurrentCacheReadWrite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	tmpDir := t.TempDir()
 
@@ -462,12 +483,13 @@ func TestConcurrentCacheReadWrite(t *testing.T) {
 	_ = os.WriteFile(cachePath, tokenizerData, 0644)
 
 	var wg sync.WaitGroup
-	errorsChan := make(chan error, 20)
+	totalOps := concurrentReaders + concurrentWriters
+	errorsChan := make(chan error, totalOps+concurrentErrorBufferMargin)
 	readCount := 0
 	var mu sync.Mutex
 
 	// Concurrent reads
-	for i := 0; i < 15; i++ {
+	for i := 0; i < concurrentReaders; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -487,7 +509,7 @@ func TestConcurrentCacheReadWrite(t *testing.T) {
 	}
 
 	// Concurrent writes (updating modtime)
-	for i := 0; i < 5; i++ {
+	for i := 0; i < concurrentWriters; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -518,11 +540,15 @@ func TestConcurrentCacheReadWrite(t *testing.T) {
 		}
 	}
 
-	if readCount != 15 {
-		t.Errorf("Expected 15 successful reads, got %d", readCount)
+	if readCount != concurrentReaders {
+		t.Errorf("Expected %d successful reads, got %d", concurrentReaders, readCount)
 	}
 }
 
+// TestConcurrentCacheValidation verifies that multiple goroutines can
+// concurrently validate the same cache entry without conflicts. This ensures
+// that data integrity checks (JSON parsing, schema validation) are safe to
+// perform in parallel and don't introduce race conditions.
 func TestConcurrentCacheValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -552,13 +578,12 @@ func TestConcurrentCacheValidation(t *testing.T) {
 	_ = os.MkdirAll(refsDir, 0755)
 	_ = os.WriteFile(filepath.Join(refsDir, "main"), []byte(snapshotHash), 0644)
 
-	// Test concurrent validation of the same cache entry
 	var wg sync.WaitGroup
-	errorsChan := make(chan error, 10)
+	errorsChan := make(chan error, concurrentValidations+concurrentErrorBufferMargin)
 	validCount := 0
 	var mu sync.Mutex
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < concurrentValidations; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -609,7 +634,61 @@ func TestConcurrentCacheValidation(t *testing.T) {
 		}
 	}
 
-	if validCount != 10 {
-		t.Errorf("Expected 10 successful validations, got %d", validCount)
+	if validCount != concurrentValidations {
+		t.Errorf("Expected %d successful validations, got %d", concurrentValidations, validCount)
+	}
+}
+
+// TestConcurrentCacheCorruption verifies that the cache system handles
+// corrupted data gracefully during concurrent access. This simulates scenarios
+// where cache files may be partially written or corrupted, ensuring that
+// errors are properly reported and don't cause panics or data races.
+func TestConcurrentCacheCorruption(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create a corrupted cache file (invalid JSON)
+	cachePath := filepath.Join(tmpDir, "tokenizer.json")
+	_ = os.WriteFile(cachePath, []byte("{ invalid json"), 0644)
+
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, concurrentValidations+concurrentErrorBufferMargin)
+	errorCount := 0
+	var mu sync.Mutex
+
+	for i := 0; i < concurrentValidations; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := loadFromCacheWithValidation(cachePath, 0)
+			if err != nil {
+				mu.Lock()
+				errorCount++
+				mu.Unlock()
+				errorsChan <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errorsChan)
+
+	// All reads should fail with an error (not panic)
+	if errorCount != concurrentValidations {
+		t.Errorf("Expected %d errors from corrupted cache, got %d", concurrentValidations, errorCount)
+	}
+
+	// Verify errors were properly reported
+	var errors []error
+	for err := range errorsChan {
+		errors = append(errors, err)
+	}
+
+	if len(errors) != concurrentValidations {
+		t.Errorf("Expected %d errors in channel, got %d", concurrentValidations, len(errors))
 	}
 }
