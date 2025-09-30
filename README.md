@@ -94,18 +94,22 @@ The following benchmarks compare pure-tokenizers (CGo-free) with CGo-based imple
 - **pure-tokenizers**: Apple M3 Max, macOS (CGo-free implementation)
 - **CGo baseline**: Apple M1 Pro, macOS ([daulet/tokenizers](https://github.com/daulet/tokenizers))
 
+> **Note**: Different hardware affects absolute timings. Focus on relative performance patterns and memory characteristics rather than exact microsecond differences.
+
+**Text Characteristics:**
+- **Short**: <50 characters (typical word or phrase)
+- **Medium**: 100-500 characters (typical sentence or paragraph)
+- **Long**: >1000 characters (multiple paragraphs)
+
 | Operation | Implementation | Time/op | Memory/op | Allocs/op | Notes |
 |-----------|---------------|---------|-----------|-----------|--------|
-| **Encode (Short Text)** | pure-tokenizers | 7.8μs | 920 B | 16 | CGo-free |
-| | CGo baseline | 10.5μs | 256 B | 12 | HuggingFace tokenizer |
-| **Encode (Medium Text)** | pure-tokenizers | 30.5μs | 1,552 B | 35 | CGo-free |
-| | CGo baseline | - | - | - | Not directly comparable |
-| **Encode (Long Text)** | pure-tokenizers | 267μs | 6,864 B | 165 | CGo-free |
-| | CGo baseline | - | - | - | Not directly comparable |
-| **Decode Operations** | pure-tokenizers | 13.4μs | 740 B | 10 | CGo-free |
-| | CGo baseline | 1.5μs | 64 B | 2 | HuggingFace tokenizer |
-| **Encode/Decode Cycle** | pure-tokenizers | 52.5μs | 2,296 B | 45 | Medium text, CGo-free |
-| | CGo baseline | - | - | - | Not directly comparable |
+| **Encode (Short Text)** | pure-tokenizers | 7.80μs | 920 B | 16 | CGo-free |
+| | CGo baseline | 10.50μs | 256 B | 12 | HuggingFace tokenizer |
+| **Encode (Medium Text)** | pure-tokenizers | 30.50μs | 1,552 B | 35 | CGo-free |
+| **Encode (Long Text)** | pure-tokenizers | 267.00μs | 6,864 B | 165 | CGo-free |
+| **Decode Operations** | pure-tokenizers | 13.40μs | 740 B | 10 | CGo-free |
+| | CGo baseline | 1.50μs | 64 B | 2 | HuggingFace tokenizer |
+| **Encode/Decode Cycle** | pure-tokenizers | 52.50μs | 2,296 B | 45 | Medium text, CGo-free |
 
 ### Key Performance Characteristics
 
@@ -116,20 +120,20 @@ The following benchmarks compare pure-tokenizers (CGo-free) with CGo-based imple
 - **Deployment simplicity**: Single binary with automatic library management
 
 **📊 Performance Analysis:**
-- **Encoding performance**: Competitive with CGo implementations for most use cases
-- **Memory usage**: Higher allocation count due to FFI boundary, but predictable patterns
+- **Encoding performance**: Competitive with CGo implementations, often faster for short texts
+- **Memory usage**: Higher allocation count due to FFI boundary (16 vs 12 allocs), but predictable patterns
 - **Batch processing**: Efficient handling of multiple text inputs
 - **Platform consistency**: Consistent performance across all supported platforms
 
 ### Advanced Benchmarks
 
-| Feature | Time/op | Memory/op | Allocs/op |
-|---------|---------|-----------|-----------|
-| **Batch Processing** (5 texts) | 356μs | 11,568 B | 261 |
-| **With Options** (all attributes) | 34.3μs | 2,160 B | 41 |
-| **Truncation** (128 tokens) | 258μs | 5,632 B | 127 |
-| **Padding** (256 tokens) | 84.9μs | 16,272 B | 535 |
-| **HuggingFace Loading** (cached) | 26.2ms | 6.45 MB | 92,188 |
+| Feature | Time/op | Memory/op | Allocs/op | Notes |
+|---------|---------|-----------|-----------|-------|
+| **Batch Processing** (5 texts) | 356.00μs | 11,568 B | 261 | Parallel encoding |
+| **With Options** (all attributes) | 34.30μs | 2,160 B | 41 | Full feature set |
+| **Truncation** (128 tokens) | 258.00μs | 5,632 B | 127 | Max length enforcement |
+| **Padding** (256 tokens) | 84.90μs | 16,272 B | 535 | Fixed length output |
+| **HuggingFace Loading** (cached) | 26.20ms | 6.45 MB | 92,188 | Model initialization |
 
 ### Benchmark Environment
 
