@@ -1,5 +1,10 @@
 package tokenizers
 
+// NOTE: This test suite modifies global state (HFHubBaseURL) for testing purposes.
+// In production code, consider using dependency injection or test-specific configs
+// to avoid global state modifications. For now, tests properly restore the original
+// values using defer statements to ensure test isolation.
+
 import (
 	"context"
 	"encoding/json"
@@ -556,11 +561,18 @@ func TestConcurrentCacheAccess(t *testing.T) {
 	wg.Add(numGoroutines)
 
 	errors := make([]error, numGoroutines)
+	done := make(chan struct{})
+
+	// Start a goroutine to wait for completion
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
-			// Each goroutine writes to its own model cache
+			// Each goroutine writes to its own model cache to avoid race conditions
 			modelID := fmt.Sprintf("concurrent-test-%d", id)
 			revision := "main"
 			cachePath := getHFCachePath(tempDir, modelID, revision)
@@ -570,7 +582,13 @@ func TestConcurrentCacheAccess(t *testing.T) {
 		}(i)
 	}
 
-	wg.Wait()
+	// Wait for all goroutines to complete with timeout
+	select {
+	case <-done:
+		// All goroutines completed successfully
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for concurrent cache operations")
+	}
 
 	// Verify all writes succeeded
 	for i, err := range errors {
@@ -623,6 +641,7 @@ func BenchmarkFromHuggingFaceWithCache(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		data, err := loadFromCache(cachePath)
 		if err != nil {
@@ -658,6 +677,7 @@ func BenchmarkFromHuggingFaceWithoutCache(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		// Clear cache each iteration to force download
 		modelID := fmt.Sprintf("bert-base-uncased-%d", i)
