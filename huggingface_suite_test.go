@@ -409,9 +409,10 @@ func TestDownloadWithMockServer(t *testing.T) {
 
 		// Without token - should fail
 		config := &HFConfig{
-			Revision: "main",
-			CacheDir: tempDir,
-			Timeout:  5 * time.Second,
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    5 * time.Second,
+			MaxRetries: 1, // Need at least 1 to actually try
 		}
 		_, err := downloadTokenizerFromHF("auth-required", config)
 		if assert.Error(t, err, "Expected authentication error without token") {
@@ -430,13 +431,14 @@ func TestDownloadWithMockServer(t *testing.T) {
 		mockServer.responseDelay = 2 * time.Second
 
 		config := &HFConfig{
-			Revision: "main",
-			CacheDir: tempDir,
-			Timeout:  500 * time.Millisecond, // Very short timeout
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    500 * time.Millisecond, // Very short timeout
+			MaxRetries: 1,                       // Need at least 1 to actually try
 		}
 
 		_, err := downloadTokenizerFromHF("bert-base-uncased", config)
-		assert.Error(t, err)
+		require.Error(t, err, "Expected timeout error")
 		// The error might be wrapped, so check if it's timeout-related
 		assert.True(t, errors.Is(err, context.DeadlineExceeded) ||
 			containsSubstring(err.Error(), "timeout") ||
@@ -630,9 +632,10 @@ func BenchmarkFromHuggingFaceWithoutCache(b *testing.B) {
 	defer func() { HFHubBaseURL = originalURL }()
 
 	config := &HFConfig{
-		Revision: "main",
-		CacheDir: tempDir,
-		Timeout:  5 * time.Second,
+		Revision:   "main",
+		CacheDir:   tempDir,
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
 	}
 
 	b.ResetTimer()
@@ -757,9 +760,10 @@ func TestStreamingDownload(t *testing.T) {
 
 	t.Run("Handle slow streaming response", func(t *testing.T) {
 		config := &HFConfig{
-			Revision: "main",
-			CacheDir: tempDir,
-			Timeout:  10 * time.Second, // Long enough for slow response
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    10 * time.Second, // Long enough for slow response
+			MaxRetries: 1,
 		}
 
 		data, err := downloadTokenizerFromHF("slow-model", config)
@@ -807,9 +811,10 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("Normal file size", func(t *testing.T) {
 		config := &HFConfig{
-			Revision: "main",
-			CacheDir: tempDir,
-			Timeout:  5 * time.Second,
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    5 * time.Second,
+			MaxRetries: 1,
 		}
 
 		data, err := downloadTokenizerFromHF("bert-base-uncased", config)
@@ -856,9 +861,10 @@ func TestRedirectHandling(t *testing.T) {
 	t.Run("Handle HTTP redirect", func(t *testing.T) {
 		mockServer.simulateRedirect = true
 		config := &HFConfig{
-			Revision: "main",
-			CacheDir: tempDir,
-			Timeout:  5 * time.Second,
+			Revision:   "main",
+			CacheDir:   tempDir,
+			Timeout:    5 * time.Second,
+			MaxRetries: 1,
 		}
 
 		data, err := downloadTokenizerFromHF("redirect-model", config)
