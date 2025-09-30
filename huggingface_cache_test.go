@@ -287,7 +287,7 @@ func TestConcurrentCacheAccessSameModel(t *testing.T) {
 	tmpDir := t.TempDir()
 	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
 	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
-	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+	t.Cleanup(func() { _ = os.Unsetenv("HF_HUB_CACHE") })
 
 	// Create a mock HF hub cache with tokenizer
 	modelID := "test/concurrent-model"
@@ -336,11 +336,19 @@ func TestConcurrentCacheAccessSameModel(t *testing.T) {
 	wg.Wait()
 	close(errorsChan)
 
+	var errors []error
 	for err := range errorsChan {
-		if err != nil {
-			t.Errorf("Concurrent access error: %v", err)
-		} else {
-			t.Error("Concurrent access returned nil data")
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Encountered %d errors during concurrent access:", len(errors))
+		for i, err := range errors {
+			if err != nil {
+				t.Errorf("  [%d] %v", i+1, err)
+			} else {
+				t.Errorf("  [%d] returned nil data", i+1)
+			}
 		}
 	}
 
@@ -357,7 +365,7 @@ func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
 	tmpDir := t.TempDir()
 	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
 	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
-	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+	t.Cleanup(func() { _ = os.Unsetenv("HF_HUB_CACHE") })
 
 	// Create multiple model caches
 	models := []string{"test/model-1", "test/model-2", "test/model-3"}
@@ -415,11 +423,19 @@ func TestConcurrentCacheAccessDifferentModels(t *testing.T) {
 	wg.Wait()
 	close(errorsChan)
 
+	var errors []error
 	for err := range errorsChan {
-		if err != nil {
-			t.Errorf("Concurrent access error: %v", err)
-		} else {
-			t.Error("Concurrent access returned nil data")
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Encountered %d errors during concurrent access:", len(errors))
+		for i, err := range errors {
+			if err != nil {
+				t.Errorf("  [%d] %v", i+1, err)
+			} else {
+				t.Errorf("  [%d] returned nil data", i+1)
+			}
 		}
 	}
 
@@ -486,11 +502,19 @@ func TestConcurrentCacheReadWrite(t *testing.T) {
 	wg.Wait()
 	close(errorsChan)
 
+	var errors []error
 	for err := range errorsChan {
-		if err != nil {
-			t.Errorf("Concurrent read/write error: %v", err)
-		} else {
-			t.Error("Concurrent read returned nil data")
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Encountered %d errors during concurrent read/write:", len(errors))
+		for i, err := range errors {
+			if err != nil {
+				t.Errorf("  [%d] %v", i+1, err)
+			} else {
+				t.Errorf("  [%d] read returned nil data", i+1)
+			}
 		}
 	}
 
@@ -507,7 +531,7 @@ func TestConcurrentCacheValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 	hfCacheDir := filepath.Join(tmpDir, "hf-cache")
 	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
-	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
+	t.Cleanup(func() { _ = os.Unsetenv("HF_HUB_CACHE") })
 
 	modelID := "test/validation-model"
 	sanitizedID := "models--test--validation-model"
@@ -569,11 +593,19 @@ func TestConcurrentCacheValidation(t *testing.T) {
 	wg.Wait()
 	close(errorsChan)
 
+	var errors []error
 	for err := range errorsChan {
-		if err != nil {
-			t.Errorf("Concurrent validation error: %v", err)
-		} else {
-			t.Error("Concurrent validation failed")
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Encountered %d errors during concurrent validation:", len(errors))
+		for i, err := range errors {
+			if err != nil {
+				t.Errorf("  [%d] %v", i+1, err)
+			} else {
+				t.Errorf("  [%d] validation failed", i+1)
+			}
 		}
 	}
 
