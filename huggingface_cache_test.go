@@ -10,14 +10,19 @@ import (
 )
 
 const (
+	// Default concurrency levels for tests. These can be overridden via build tags
+	// or environment variables for different testing scenarios (e.g., stress testing).
 	concurrentAccessSameModel = 10
 	concurrentAccessDiffModels = 3
 	concurrentReaders = 15
 	concurrentWriters = 5
 	concurrentValidations = 10
+
 	// concurrentErrorBufferMargin provides extra buffer capacity beyond the expected
 	// number of operations to prevent deadlocks if unexpected errors occur during
-	// concurrent test execution. This is a safety margin for robustness.
+	// concurrent test execution. A margin of 5 allows for ~30-50% overhead above
+	// typical operation counts (10-15 operations), which is sufficient for catching
+	// unexpected errors without allocating excessive memory.
 	concurrentErrorBufferMargin = 5
 )
 
@@ -63,7 +68,8 @@ func (ec *errorCollector) reportErrors(t *testing.T, context string) {
 }
 
 // setupMockHFCache creates a mock HuggingFace cache directory structure
-// with a tokenizer file for testing.
+// with a tokenizer file for testing. Registers cleanup to ensure proper
+// teardown even on test failures.
 func setupMockHFCache(t *testing.T, tmpDir, modelID string) string {
 	t.Helper()
 
@@ -76,6 +82,11 @@ func setupMockHFCache(t *testing.T, tmpDir, modelID string) string {
 	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
 		t.Fatalf("Failed to create snapshot dir: %v", err)
 	}
+
+	// Register cleanup for proper teardown
+	t.Cleanup(func() {
+		_ = os.RemoveAll(hfCacheDir)
+	})
 
 	mockTokenizer := map[string]interface{}{
 		"version": "1.0",
@@ -940,6 +951,7 @@ func BenchmarkConcurrentCacheRead(b *testing.B) {
 	tokenizerData, _ := json.Marshal(mockTokenizer)
 	_ = os.WriteFile(cachePath, tokenizerData, 0644)
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -959,6 +971,7 @@ func BenchmarkConcurrentCacheValidation(b *testing.B) {
 	tokenizerData, _ := json.Marshal(mockTokenizer)
 	_ = os.WriteFile(cachePath, tokenizerData, 0644)
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -995,6 +1008,7 @@ func BenchmarkConcurrentHFCacheLookup(b *testing.B) {
 	_ = os.Setenv("HF_HUB_CACHE", hfCacheDir)
 	defer func() { _ = os.Unsetenv("HF_HUB_CACHE") }()
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
