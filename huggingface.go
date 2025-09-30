@@ -406,6 +406,10 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 			// Use server-suggested delay if available
 			if retryAfterDuration > 0 {
 				delay = retryAfterDuration
+				if os.Getenv("DEBUG") != "" {
+					log.Printf("[DEBUG] Retry attempt %d: using server-suggested delay from Retry-After header (%v)",
+						attempt, delay)
+				}
 				// Reset for next iteration
 				retryAfterDuration = 0
 			} else {
@@ -414,6 +418,10 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 				// Add 0-25% jitter to prevent thundering herd
 				jitter := time.Duration(rand.Float64() * 0.25 * float64(baseDelay))
 				delay = baseDelay + jitter
+				if os.Getenv("DEBUG") != "" {
+					log.Printf("[DEBUG] Retry attempt %d: using exponential backoff with jitter (base: %v, jitter: %v, total: %v)",
+						attempt, baseDelay, jitter, delay)
+				}
 			}
 
 			time.Sleep(delay)
@@ -430,6 +438,19 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 		if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
 				retryAfterDuration = parseRetryAfter(retryAfter)
+				if os.Getenv("DEBUG") != "" {
+					if retryAfterDuration > 0 {
+						if retryAfterDuration >= HFMaxRetryAfterDelay {
+							log.Printf("[DEBUG] Retry-After header detected: %s (delay: %v, at or exceeding max allowed: %v)",
+								retryAfter, retryAfterDuration, HFMaxRetryAfterDelay)
+						} else {
+							log.Printf("[DEBUG] Retry-After header detected: %s (parsed delay: %v)",
+								retryAfter, retryAfterDuration)
+						}
+					} else {
+						log.Printf("[DEBUG] Retry-After header detected but could not be parsed: %s", retryAfter)
+					}
+				}
 			}
 		}
 
