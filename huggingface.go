@@ -879,21 +879,28 @@ func getHFHubCacheDir() string {
 
 // loadFromCacheWithValidation loads tokenizer from cache with optional TTL validation
 func loadFromCacheWithValidation(path string, ttl time.Duration) ([]byte, error) {
-	if !fileExists(path) {
-		return nil, errors.New("cache file not found")
+	// Single syscall for both existence and modtime check
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.New("cache file not found")
+		}
+		return nil, errors.Wrap(err, "failed to stat cache file")
+	}
+
+	// Check if it's a directory (defensive check; shouldn't occur in normal operation
+	// as cache files are created via os.WriteFile, but could indicate cache corruption).
+	if info.IsDir() {
+		return nil, errors.New("cache path is a directory")
 	}
 
 	// Check if cache is still valid based on TTL
-	if ttl > 0 {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to stat cache file")
-		}
-		if time.Since(info.ModTime()) > ttl {
-			return nil, errors.New("cache expired")
-		}
+	if ttl > 0 && time.Since(info.ModTime()) > ttl {
+		return nil, errors.New("cache expired")
 	}
 
+	// Read file (small race window remains between Stat and ReadFile, but acceptable
+	// for cache scenarios; full elimination would require OS-specific file locking).
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read cache file")

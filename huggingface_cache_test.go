@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -917,9 +919,21 @@ func TestConcurrentCacheEviction(t *testing.T) {
 			if err != nil {
 				// Ignore file-not-found and JSON parsing errors as cache might be evicted/corrupted
 				errMsg := err.Error()
-				if !os.IsNotExist(err) &&
-				   errMsg != "cache file not found" &&
-				   !strings.Contains(errMsg, "unexpected end of JSON") {
+				// Check for file-not-found (including wrapped errors).
+				// errors.Is() handles both wrapped and unwrapped os.ErrNotExist.
+				// String matching is used for platform-specific OS error messages:
+				// - "cache file not found" (our error)
+				// - "cannot find the file" (Windows)
+				// - "no such file" (Unix-like systems)
+				// Note: String matching is pragmatic but brittle; acceptable for test scenarios.
+				isFileNotFound := errors.Is(err, os.ErrNotExist) ||
+					strings.Contains(errMsg, "cache file not found") ||
+					strings.Contains(errMsg, "cannot find the file") ||
+					strings.Contains(errMsg, "no such file")
+
+				// Ignore expected concurrent access errors
+				if !isFileNotFound &&
+					!strings.Contains(errMsg, "unexpected end of JSON") {
 					ec.add(err)
 				}
 				return
