@@ -35,6 +35,101 @@ const (
 // Tests setting HF_HUB_CACHE run sequentially to avoid cross-test interference,
 // as environment variables are process-global and would cause race conditions.
 
+// TestIsExpectedConcurrentCacheError verifies that the helper function correctly
+// identifies expected errors during concurrent cache operations.
+func TestIsExpectedConcurrentCacheError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "os.ErrNotExist",
+			err:      os.ErrNotExist,
+			expected: true,
+		},
+		{
+			name:     "ErrCacheNotFound",
+			err:      ErrCacheNotFound,
+			expected: true,
+		},
+		{
+			name:     "wrapped os.ErrNotExist",
+			err:      errors.Wrap(os.ErrNotExist, "failed to read cache"),
+			expected: true,
+		},
+		{
+			name:     "wrapped ErrCacheNotFound",
+			err:      errors.Wrap(ErrCacheNotFound, "cache lookup failed"),
+			expected: true,
+		},
+		{
+			name:     "file not found message",
+			err:      errors.New("cannot find the file specified"),
+			expected: true,
+		},
+		{
+			name:     "no such file message",
+			err:      errors.New("no such file or directory"),
+			expected: true,
+		},
+		{
+			name:     "unexpected end of JSON",
+			err:      errors.New("unexpected end of JSON input"),
+			expected: true,
+		},
+		{
+			name:     "io.ErrUnexpectedEOF",
+			err:      io.ErrUnexpectedEOF,
+			expected: true,
+		},
+		{
+			name:     "wrapped io.ErrUnexpectedEOF",
+			err:      errors.Wrap(io.ErrUnexpectedEOF, "read failed"),
+			expected: true,
+		},
+		{
+			name:     "Windows file locking error (full message)",
+			err:      errors.New("open C:\\Users\\test\\tokenizer.json: The process cannot access the file because it is being used by another process."),
+			expected: true,
+		},
+		{
+			name:     "Windows file locking error (wrapped)",
+			err:      errors.Wrap(errors.New("The process cannot access the file because it is being used by another process."), "failed to read cache file"),
+			expected: true,
+		},
+		{
+			name:     "unrelated error",
+			err:      errors.New("permission denied"),
+			expected: false,
+		},
+		{
+			name:     "network error",
+			err:      errors.New("connection refused"),
+			expected: false,
+		},
+		{
+			name:     "partial Windows message should not match",
+			err:      errors.New("being used by another process"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isExpectedConcurrentCacheError(tt.err)
+			if result != tt.expected {
+				t.Errorf("isExpectedConcurrentCacheError(%v) = %v, want %v", tt.err, result, tt.expected)
+			}
+		})
+	}
+}
+
 // errorCollector provides thread-safe error collection for concurrent tests.
 // This pattern could be extracted to a test utilities package for reuse across
 // the codebase if needed in other test files.
@@ -72,8 +167,8 @@ func isExpectedConcurrentCacheError(err error) bool {
 		return true
 	}
 
-	// Windows-specific file locking during concurrent access
-	if strings.Contains(errMsg, "being used by another process") {
+	// Windows-specific file locking during concurrent access (ERROR_SHARING_VIOLATION)
+	if strings.Contains(errMsg, "process cannot access the file because it is being used by another process") {
 		return true
 	}
 
