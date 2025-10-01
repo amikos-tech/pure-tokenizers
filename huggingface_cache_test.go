@@ -72,6 +72,11 @@ func isExpectedConcurrentCacheError(err error) bool {
 		return true
 	}
 
+	// Windows-specific file locking during concurrent access
+	if strings.Contains(errMsg, "being used by another process") {
+		return true
+	}
+
 	return false
 }
 
