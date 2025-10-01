@@ -61,7 +61,7 @@ func isExpectedConcurrentCacheError(err error) bool {
 
 	// File not found (including wrapped errors and OS-specific messages)
 	if errors.Is(err, os.ErrNotExist) ||
-		strings.Contains(errMsg, "cache file not found") ||
+		errors.Is(err, ErrCacheNotFound) ||
 		strings.Contains(errMsg, "cannot find the file") ||
 		strings.Contains(errMsg, "no such file") {
 		return true
