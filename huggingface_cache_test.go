@@ -49,6 +49,31 @@ func (ec *errorCollector) add(err error) {
 	ec.errors = append(ec.errors, err)
 }
 
+// isExpectedConcurrentCacheError returns true if the error is expected during
+// concurrent cache operations (file not found, incomplete reads, etc.)
+func isExpectedConcurrentCacheError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+
+	// File not found (including wrapped errors and OS-specific messages)
+	if errors.Is(err, os.ErrNotExist) ||
+		strings.Contains(errMsg, "cache file not found") ||
+		strings.Contains(errMsg, "cannot find the file") ||
+		strings.Contains(errMsg, "no such file") {
+		return true
+	}
+
+	// Partial reads during concurrent access
+	if strings.Contains(errMsg, "unexpected end of JSON") {
+		return true
+	}
+
+	return false
+}
+
 // getErrors returns all collected errors.
 func (ec *errorCollector) getErrors() []error {
 	ec.mu.Lock()
@@ -917,23 +942,8 @@ func TestConcurrentCacheEviction(t *testing.T) {
 			}
 			data, err := loadFromCacheWithValidation(cachePath, 0)
 			if err != nil {
-				// Ignore file-not-found and JSON parsing errors as cache might be evicted/corrupted
-				errMsg := err.Error()
-				// Check for file-not-found (including wrapped errors).
-				// errors.Is() handles both wrapped and unwrapped os.ErrNotExist.
-				// String matching is used for platform-specific OS error messages:
-				// - "cache file not found" (our error)
-				// - "cannot find the file" (Windows)
-				// - "no such file" (Unix-like systems)
-				// Note: String matching is pragmatic but brittle; acceptable for test scenarios.
-				isFileNotFound := errors.Is(err, os.ErrNotExist) ||
-					strings.Contains(errMsg, "cache file not found") ||
-					strings.Contains(errMsg, "cannot find the file") ||
-					strings.Contains(errMsg, "no such file")
-
-				// Ignore expected concurrent access errors
-				if !isFileNotFound &&
-					!strings.Contains(errMsg, "unexpected end of JSON") {
+				// Ignore expected concurrent cache errors (file not found, partial reads, etc.)
+				if !isExpectedConcurrentCacheError(err) {
 					ec.add(err)
 				}
 				return
