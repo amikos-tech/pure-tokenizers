@@ -50,6 +50,9 @@ var (
 	// Shared HTTP client for HuggingFace downloads with connection pooling
 	hfHTTPClient *http.Client
 	hfClientOnce sync.Once
+
+	// ErrCacheNotFound is returned when a requested cache file does not exist
+	ErrCacheNotFound = errors.New("cache file not found")
 )
 
 // GetLibraryVersion returns the current library version used in User-Agent
@@ -883,7 +886,7 @@ func loadFromCacheWithValidation(path string, ttl time.Duration) ([]byte, error)
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, errors.New("cache file not found")
+			return nil, ErrCacheNotFound
 		}
 		return nil, errors.Wrap(err, "failed to stat cache file")
 	}
