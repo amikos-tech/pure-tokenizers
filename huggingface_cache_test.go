@@ -2,6 +2,7 @@ package tokenizers
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,7 +68,7 @@ func isExpectedConcurrentCacheError(err error) bool {
 	}
 
 	// Partial reads during concurrent access
-	if strings.Contains(errMsg, "unexpected end of JSON") {
+	if strings.Contains(errMsg, "unexpected end of JSON") || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 
