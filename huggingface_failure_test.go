@@ -19,6 +19,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Test configuration constants
+const (
+	// Timeout constants
+	defaultTestTimeout      = 5 * time.Second
+	shortTestTimeout        = 2 * time.Second
+	veryShortTestTimeout    = 100 * time.Millisecond
+	longTestTimeout         = 10 * time.Second
+	extendedTestTimeout     = 30 * time.Second
+
+	// Retry constants
+	defaultMaxRetries       = 3
+	shortMaxRetries         = 1
+	mediumMaxRetries        = 2
+
+	// Network simulation constants
+	slowResponseChunkSize   = 10  // bytes per chunk for slow response simulation
+	slowResponseChunkDelay  = 50 * time.Millisecond
+)
+
+// TestingHelper is a minimal interface that both testing.T and testing.B satisfy
+type TestingHelper interface {
+	Helper()
+	Cleanup(func())
+	Fatal(...interface{})
+	Fatalf(string, ...interface{})
+}
+
 // FailureMode defines the type of failure to inject
 type FailureMode string
 
@@ -51,7 +78,7 @@ type FailureInjectionServer struct {
 }
 
 // NewFailureInjectionServer creates a new server with configurable failure modes
-func NewFailureInjectionServer(t *testing.T) *FailureInjectionServer {
+func NewFailureInjectionServer(t TestingHelper) *FailureInjectionServer {
 	t.Helper()
 
 	fis := &FailureInjectionServer{
@@ -64,6 +91,11 @@ func NewFailureInjectionServer(t *testing.T) *FailureInjectionServer {
 		atomic.AddInt32(&fis.requestCount, 1)
 		fis.handleRequest(w, r)
 	}))
+
+	// Use Cleanup for proper resource management
+	t.Cleanup(func() {
+		fis.Close()
+	})
 
 	return fis
 }
@@ -162,9 +194,8 @@ func (fis *FailureInjectionServer) injectFailure(w http.ResponseWriter, r *http.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		data := fis.tokenizer
-		chunkSize := 10 // Very small chunks
-		for i := 0; i < len(data); i += chunkSize {
-			end := i + chunkSize
+		for i := 0; i < len(data); i += slowResponseChunkSize {
+			end := i + slowResponseChunkSize
 			if end > len(data) {
 				end = len(data)
 			}
@@ -172,7 +203,7 @@ func (fis *FailureInjectionServer) injectFailure(w http.ResponseWriter, r *http.
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(slowResponseChunkDelay)
 		}
 
 	case FailureModePartialResponse:
@@ -235,7 +266,6 @@ func (fis *FailureInjectionServer) injectFailure(w http.ResponseWriter, r *http.
 // TestNetworkTimeouts tests various timeout scenarios
 func TestNetworkTimeouts(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -251,8 +281,8 @@ func TestNetworkTimeouts(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    100 * time.Millisecond,
-			MaxRetries: 1,
+			Timeout:    veryShortTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -273,7 +303,7 @@ func TestNetworkTimeouts(t *testing.T) {
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    200 * time.Millisecond,
-			MaxRetries: 1,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -288,8 +318,8 @@ func TestNetworkTimeouts(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    100 * time.Millisecond,
-			MaxRetries: 1,
+			Timeout:    veryShortTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -300,7 +330,6 @@ func TestNetworkTimeouts(t *testing.T) {
 // TestHTTPErrorCodes tests handling of various HTTP error codes
 func TestHTTPErrorCodes(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -342,8 +371,8 @@ func TestHTTPErrorCodes(t *testing.T) {
 			config := &HFConfig{
 				Revision:   "main",
 				CacheDir:   tempDir,
-				Timeout:    2 * time.Second,
-				MaxRetries: 3,
+				Timeout:    shortTestTimeout,
+				MaxRetries: defaultMaxRetries,
 			}
 
 			data, err := downloadTokenizerFromHF("test-model", config)
@@ -365,7 +394,6 @@ func TestHTTPErrorCodes(t *testing.T) {
 // TestRateLimiting tests rate limiting scenarios with Retry-After header
 func TestRateLimiting(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -382,8 +410,8 @@ func TestRateLimiting(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    10 * time.Second,
-			MaxRetries: 3,
+			Timeout:    longTestTimeout,
+			MaxRetries: defaultMaxRetries,
 		}
 
 		start := time.Now()
@@ -405,8 +433,8 @@ func TestRateLimiting(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    10 * time.Second,
-			MaxRetries: 2,
+			Timeout:    longTestTimeout,
+			MaxRetries: mediumMaxRetries,
 		}
 
 		data, err := downloadTokenizerFromHF("test-model", config)
@@ -426,13 +454,13 @@ func TestRateLimiting(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    10 * time.Second,
-			MaxRetries: 3,
+			Timeout:    longTestTimeout,
+			MaxRetries: defaultMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "rate limit")
+		assert.ErrorContains(t, err, "rate limit")
 	})
 
 	t.Run("Invalid Retry-After falls back to exponential backoff", func(t *testing.T) {
@@ -444,8 +472,8 @@ func TestRateLimiting(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    10 * time.Second,
-			MaxRetries: 3,
+			Timeout:    longTestTimeout,
+			MaxRetries: defaultMaxRetries,
 		}
 
 		data, err := downloadTokenizerFromHF("test-model", config)
@@ -477,7 +505,6 @@ func TestRateLimiting(t *testing.T) {
 // TestPartialAndCorruptedResponses tests handling of incomplete or malformed data
 func TestPartialAndCorruptedResponses(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -493,8 +520,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 1,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -509,13 +536,13 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 1,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "invalid")
+		assert.ErrorContains(t, err, "invalid")
 	})
 
 	t.Run("Truncated JSON response", func(t *testing.T) {
@@ -526,8 +553,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 1,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -542,8 +569,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 3,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: defaultMaxRetries,
 		}
 
 		data, err := downloadTokenizerFromHF("test-model", config)
@@ -556,7 +583,6 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 // TestContentLengthValidation tests Content-Length header handling
 func TestContentLengthValidation(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -572,14 +598,14 @@ func TestContentLengthValidation(t *testing.T) {
 		config := &HFConfig{
 			Revision:         "main",
 			CacheDir:         tempDir,
-			Timeout:          5 * time.Second,
+			Timeout:          defaultTestTimeout,
 			MaxRetries:       1,
 			MaxTokenizerSize: DefaultMaxTokenizerSize,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "too large")
+		assert.ErrorContains(t, err, "too large")
 	})
 
 	t.Run("Custom size limit enforced", func(t *testing.T) {
@@ -590,21 +616,20 @@ func TestContentLengthValidation(t *testing.T) {
 		config := &HFConfig{
 			Revision:         "main",
 			CacheDir:         tempDir,
-			Timeout:          5 * time.Second,
+			Timeout:          defaultTestTimeout,
 			MaxRetries:       1,
 			MaxTokenizerSize: 1024, // Very small limit
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "too large")
+		assert.ErrorContains(t, err, "too large")
 	})
 }
 
 // TestAuthenticationFailures tests various authentication scenarios
 func TestAuthenticationFailures(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -620,14 +645,14 @@ func TestAuthenticationFailures(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 3,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: defaultMaxRetries,
 			Token:      "", // No token
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "authentication")
+		assert.ErrorContains(t, err, "authentication")
 		// Should not retry auth errors
 		assert.Equal(t, int32(1), server.GetRequestCount())
 	})
@@ -640,25 +665,26 @@ func TestAuthenticationFailures(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 3,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: defaultMaxRetries,
 			Token:      "invalid_token",
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "authentication")
+		assert.ErrorContains(t, err, "authentication")
 	})
 }
 
-// TestConcurrentDownloadFailures tests failure handling with concurrent operations
+// TestConcurrentDownloadFailures tests failure handling with concurrent operations.
+// This test validates thread-safety of the download logic under concurrent access.
+// Run with -race flag to detect potential race conditions.
 func TestConcurrentDownloadFailures(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping concurrent test in short mode")
 	}
 
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -683,8 +709,8 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 				config := &HFConfig{
 					Revision:   "main",
 					CacheDir:   filepath.Join(tempDir, fmt.Sprintf("cache-%d", id)),
-					Timeout:    5 * time.Second,
-					MaxRetries: 3,
+					Timeout:    defaultTestTimeout,
+					MaxRetries: defaultMaxRetries,
 				}
 
 				modelID := fmt.Sprintf("test-model-%d", id)
@@ -713,7 +739,6 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 // TestSlowNetworkConditions tests behavior under degraded network
 func TestSlowNetworkConditions(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -729,8 +754,8 @@ func TestSlowNetworkConditions(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    2 * time.Second,
-			MaxRetries: 1,
+			Timeout:    shortTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		start := time.Now()
@@ -751,7 +776,7 @@ func TestSlowNetworkConditions(t *testing.T) {
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    500 * time.Millisecond,
-			MaxRetries: 1,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -762,7 +787,6 @@ func TestSlowNetworkConditions(t *testing.T) {
 // TestConnectionResetScenarios tests connection reset handling
 func TestConnectionResetScenarios(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -778,8 +802,8 @@ func TestConnectionResetScenarios(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 3,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: defaultMaxRetries,
 		}
 
 		data, err := downloadTokenizerFromHF("test-model", config)
@@ -792,7 +816,6 @@ func TestConnectionResetScenarios(t *testing.T) {
 // TestCacheCorruptionWithDownload tests cache corruption scenarios
 func TestCacheCorruptionWithDownload(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -822,8 +845,8 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 1,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		data, err = downloadTokenizerFromHF(modelID, config)
@@ -847,8 +870,8 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   readOnlyDir,
-			Timeout:    5 * time.Second,
-			MaxRetries: 1,
+			Timeout:    defaultTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		// Download should succeed but cache write may fail
@@ -860,12 +883,11 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 
 // BenchmarkDownloadWithFailureRecovery benchmarks performance with intermittent failures
 func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
-	server := NewFailureInjectionServer(&testing.T{})
-	defer server.Close()
+	server := NewFailureInjectionServer(b)
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
+	b.Cleanup(func() { HFHubBaseURL = originalURL })
 
 	tempDir := b.TempDir()
 
@@ -876,8 +898,8 @@ func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 	config := &HFConfig{
 		Revision:   "main",
 		CacheDir:   tempDir,
-		Timeout:    5 * time.Second,
-		MaxRetries: 3,
+		Timeout:    defaultTestTimeout,
+		MaxRetries: defaultMaxRetries,
 	}
 
 	b.ReportAllocs()
@@ -896,12 +918,11 @@ func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 
 // BenchmarkConcurrentDownloadsWithFailures benchmarks concurrent downloads with failures
 func BenchmarkConcurrentDownloadsWithFailures(b *testing.B) {
-	server := NewFailureInjectionServer(&testing.T{})
-	defer server.Close()
+	server := NewFailureInjectionServer(b)
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
+	b.Cleanup(func() { HFHubBaseURL = originalURL })
 
 	tempDir := b.TempDir()
 
@@ -912,8 +933,8 @@ func BenchmarkConcurrentDownloadsWithFailures(b *testing.B) {
 	config := &HFConfig{
 		Revision:   "main",
 		CacheDir:   tempDir,
-		Timeout:    5 * time.Second,
-		MaxRetries: 2,
+		Timeout:    defaultTestTimeout,
+		MaxRetries: mediumMaxRetries,
 	}
 
 	b.ReportAllocs()
@@ -942,12 +963,12 @@ func TestDialerFailures(t *testing.T) {
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    1 * time.Second,
-			MaxRetries: 2,
+			MaxRetries: mediumMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "connection")
+		assert.ErrorContains(t, err, "connection")
 	})
 
 	t.Run("Invalid hostname", func(t *testing.T) {
@@ -958,8 +979,8 @@ func TestDialerFailures(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    2 * time.Second,
-			MaxRetries: 1,
+			Timeout:    shortTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
@@ -970,7 +991,6 @@ func TestDialerFailures(t *testing.T) {
 // TestContextCancellation tests explicit context cancellation
 func TestContextCancellation(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -1006,7 +1026,6 @@ func TestContextCancellation(t *testing.T) {
 // TestErrorMessageQuality verifies that error messages are helpful for debugging
 func TestErrorMessageQuality(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-	defer server.Close()
 
 	originalURL := HFHubBaseURL
 	HFHubBaseURL = server.URL
@@ -1056,8 +1075,8 @@ func TestErrorMessageQuality(t *testing.T) {
 			config := &HFConfig{
 				Revision:   "main",
 				CacheDir:   tempDir,
-				Timeout:    2 * time.Second,
-				MaxRetries: 1,
+				Timeout:    shortTestTimeout,
+				MaxRetries: shortMaxRetries,
 			}
 
 			_, err := downloadTokenizerFromHF("test-model", config)
@@ -1084,8 +1103,8 @@ func TestDNSFailures(t *testing.T) {
 		config := &HFConfig{
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    2 * time.Second,
-			MaxRetries: 1,
+			Timeout:    shortTestTimeout,
+			MaxRetries: shortMaxRetries,
 		}
 
 		_, err := downloadTokenizerFromHF("test-model", config)
