@@ -461,8 +461,16 @@ func TestClearHFCachePattern(t *testing.T) {
 	})
 
 	t.Run("SecurityAbsolutePath", func(t *testing.T) {
-		// Attempt absolute path
-		cleared, err := ClearHFCachePattern("/etc/passwd")
+		// Attempt absolute path (platform-specific)
+		var absPath string
+		if filepath.Separator == '\\' {
+			// Windows
+			absPath = "C:\\Windows\\System32"
+		} else {
+			// Unix-like
+			absPath = "/etc/passwd"
+		}
+		cleared, err := ClearHFCachePattern(absPath)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "absolute paths not allowed")
 		assert.Equal(t, 0, cleared)
