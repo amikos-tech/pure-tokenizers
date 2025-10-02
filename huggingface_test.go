@@ -460,6 +460,20 @@ func TestClearHFCachePattern(t *testing.T) {
 		assert.Equal(t, 0, cleared)
 	})
 
+	t.Run("SecurityDotDotInPattern", func(t *testing.T) {
+		// Attempt to bypass security with dots embedded in pattern
+		// This could look like a valid model name but contains ".."
+		cleared, err := ClearHFCachePattern("bert-base-..cased")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "'..'")
+		assert.Equal(t, 0, cleared)
+
+		// Also test with slashes
+		cleared, err = ClearHFCachePattern("org/../model")
+		assert.Error(t, err)
+		assert.Equal(t, 0, cleared)
+	})
+
 	t.Run("SecurityAbsolutePath", func(t *testing.T) {
 		// Attempt absolute path (platform-specific)
 		var absPath string

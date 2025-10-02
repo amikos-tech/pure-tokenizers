@@ -771,14 +771,30 @@ func ClearHFCache() error {
 // Examples:
 //   - "bert-*" matches all BERT model variants
 //   - "huggingface/*" matches all models from the huggingface organization
-//   - "*/tokenizer" matches any model ending with "/tokenizer"
+//   - "*/bert-*" matches BERT models from any organization
 //
-// For security, patterns containing ".." or absolute paths are rejected.
+// For security, patterns containing ".." in path segments or absolute paths are rejected.
 // Returns the number of cache entries cleared and any error encountered.
 func ClearHFCachePattern(pattern string) (int, error) {
 	// Security: prevent directory traversal attempts
-	if strings.Contains(pattern, "..") || filepath.IsAbs(pattern) {
-		return 0, errors.New("invalid pattern: directory traversal and absolute paths not allowed")
+	// Check if pattern is an absolute path
+	if filepath.IsAbs(pattern) {
+		return 0, errors.New("invalid pattern: absolute paths not allowed")
+	}
+
+	// Check each path component for ".." to prevent directory traversal
+	// This prevents both "../etc" and valid-looking patterns like "bert-..base"
+	parts := strings.Split(pattern, "/")
+	for _, part := range parts {
+		if part == ".." {
+			return 0, errors.New("invalid pattern: directory traversal not allowed")
+		}
+	}
+
+	// Additional check: patterns containing ".." anywhere are suspicious
+	// This catches edge cases like "bert-base-..cased" which are unlikely to be legitimate
+	if strings.Contains(pattern, "..") {
+		return 0, errors.New("invalid pattern: patterns containing '..' are not allowed")
 	}
 
 	// Validate pattern syntax upfront for faster failure

@@ -46,7 +46,7 @@ func main() {
 
 func downloadAndCache() error {
 	fmt.Println("1. Downloading and Caching Models")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	modelID := "bert-base-uncased"
 
@@ -82,7 +82,7 @@ func downloadAndCache() error {
 
 func queryCacheInfo() error {
 	fmt.Println("2. Querying Cache Information")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	models := []string{
 		"bert-base-uncased",
@@ -109,7 +109,7 @@ func queryCacheInfo() error {
 
 func customCacheDirectory() error {
 	fmt.Println("3. Custom Cache Directory")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	// Create a temporary custom cache directory
 	tempDir, err := os.MkdirTemp("", "tokenizers-custom-cache-*")
@@ -159,7 +159,7 @@ func customCacheDirectory() error {
 
 func offlineMode() error {
 	fmt.Println("4. Offline Mode")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	modelID := "bert-base-uncased"
 
@@ -201,7 +201,7 @@ func offlineMode() error {
 
 func clearModelCache() error {
 	fmt.Println("5. Clear Model Cache")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	modelID := "distilbert-base-uncased"
 
@@ -254,7 +254,7 @@ func clearModelCache() error {
 
 func clearCachePatterns() error {
 	fmt.Println("6. Clear Cache with Glob Patterns")
-	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+	fmt.Println(strings.Repeat("=", 35))
 
 	// First, download some models to demonstrate pattern clearing
 	models := []string{
