@@ -92,8 +92,8 @@ runs:
             LIB_NAME="libtokenizers.so"
             ;;
           *-unknown-linux-musl)
-            # musl targets also produce .so (cdylib), not .a
-            LIB_NAME="libtokenizers.so"
+            # musl targets don't support cdylib, only staticlib
+            LIB_NAME="libtokenizers.a"
             ;;
           *-pc-windows-msvc)
             LIB_NAME="tokenizers.dll"

@@ -104,8 +104,8 @@ The composite actions follow a layered approach:
 4. Note: Default is `'auto'` which uses cross on Linux, native elsewhere
 
 **Library Output**:
-- All platforms produce shared libraries (.so/.dylib/.dll)
-- musl targets produce `.so` (cdylib), not `.a` static libraries
+- GNU Linux, macOS, Windows produce shared libraries (`.so`/`.dylib`/`.dll`)
+- musl targets produce static libraries (`.a`) - cdylib is not supported on musl
 - Cargo.toml specifies `crate-type = ["cdylib", "staticlib"]`
 
 ---
