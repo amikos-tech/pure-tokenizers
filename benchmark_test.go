@@ -185,6 +185,9 @@ func BenchmarkFromFile(b *testing.B) {
 	}
 }
 
+// BenchmarkFromHuggingFace measures tokenizer creation performance from HuggingFace Hub.
+// CreationOnly: measures just the FromHuggingFace call excluding Close() overhead
+// FullLifecycle: measures complete lifecycle including Close()
 func BenchmarkFromHuggingFace(b *testing.B) {
 	b.ReportAllocs()
 
