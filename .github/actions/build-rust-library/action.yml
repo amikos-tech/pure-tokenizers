@@ -65,13 +65,14 @@ runs:
       run: cargo zigbuild --release --target ${{ inputs.target }}
 
     - name: Build with cargo (native)
-      # Fallback: macOS, Windows, or Linux when explicitly skipping cross/zigbuild
+      # macOS/Windows with auto (default), or any platform when explicitly forcing native
       # Note: Uses bash shell even on Windows (via Git Bash) for consistency
       # with other build steps and cross-platform script compatibility
       if: |
-        (runner.os == 'macOS' || runner.os == 'Windows' || runner.os == 'Linux') &&
-        inputs.use-zigbuild != 'true' &&
-        inputs.use-cross == 'false'
+        inputs.use-zigbuild != 'true' && (
+          inputs.use-cross == 'false' ||
+          (inputs.use-cross == 'auto' && runner.os != 'Linux')
+        )
       shell: bash
       run: cargo build --release --target ${{ inputs.target }}
 
