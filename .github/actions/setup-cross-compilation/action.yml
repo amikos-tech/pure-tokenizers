@@ -21,7 +21,9 @@ runs:
       id: cache-cross
       with:
         path: ~/.cargo/bin/cross
-        key: ${{ runner.os }}-cross-${{ hashFiles('~/.cargo/bin/cross') }}
+        # Use a static key based on cross version from Cargo.lock (if available)
+        # Falls back to runner.os only for simpler cache management
+        key: ${{ runner.os }}-cross-v0.2.5
         restore-keys: |
           ${{ runner.os }}-cross-
 
