@@ -107,6 +107,11 @@ runs:
         LIB_PATH="target/${{ inputs.target }}/release/${LIB_NAME}"
 
         echo "Expecting library at: $LIB_PATH"
+
+        # Debug: List what's actually in the release directory
+        echo "Contents of target/${{ inputs.target }}/release/:"
+        ls -lh "target/${{ inputs.target }}/release/" | grep -E "libtokenizers|tokenizers" || echo "No matching files found"
+
         if [ -f "$LIB_PATH" ]; then
           echo "✓ Library found"
           ls -lh "$LIB_PATH"
