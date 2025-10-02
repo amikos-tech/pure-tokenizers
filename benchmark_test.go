@@ -207,15 +207,20 @@ func BenchmarkFromHuggingFace(b *testing.B) {
 	}
 	_ = tokenizer.Close()
 
+	b.ResetTimer()
+
 	b.Run("CreationOnly", func(b *testing.B) {
+		tokenizers := make([]*Tokenizer, 0, b.N)
 		for b.Loop() {
 			tokenizer, err := FromHuggingFace(modelID)
 			if err != nil {
 				b.Fatalf("Failed to load tokenizer: %v", err)
 			}
-			b.StopTimer()
-			_ = tokenizer.Close()
-			b.StartTimer()
+			tokenizers = append(tokenizers, tokenizer)
+		}
+		b.StopTimer()
+		for _, tok := range tokenizers {
+			_ = tok.Close()
 		}
 	})
 
