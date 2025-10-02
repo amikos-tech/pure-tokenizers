@@ -27,8 +27,19 @@ runs:
         restore-keys: |
           ${{ runner.os }}-cross-
 
+    - name: Check if cross is already installed
+      id: check-cross
+      shell: bash
+      run: |
+        if command -v cross &> /dev/null; then
+          echo "installed=true" >> $GITHUB_OUTPUT
+          echo "cross is already installed: $(cross --version)"
+        else
+          echo "installed=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Install cross
-      if: steps.cache-cross.outputs.cache-hit != 'true'
+      if: steps.check-cross.outputs.installed != 'true'
       shell: bash
       run: |
         # Install cross from crates.io (stable release)
