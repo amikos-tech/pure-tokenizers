@@ -1,0 +1,169 @@
+name: Get Rust Library
+description: Download latest Rust library release or build locally as fallback
+
+inputs:
+  github-token:
+    description: 'GitHub token for downloading releases'
+    required: true
+  repository:
+    description: 'GitHub repository (owner/repo)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download or build Rust library (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set +e  # Temporarily disable exit on error
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        set -e  # Re-enable exit on error
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          ARCHIVE="libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+          gh release download $LATEST_RELEASE --pattern "$ARCHIVE"
+
+          # Verify download succeeded
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "Failed to download $ARCHIVE, building locally instead"
+            cargo build --release
+            echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+          else
+            # Download and verify checksum for supply chain security
+            CHECKSUM_FILE="${ARCHIVE}.sha256"
+            gh release download $LATEST_RELEASE --pattern "$CHECKSUM_FILE" || true
+
+            if [ -f "$CHECKSUM_FILE" ]; then
+              echo "Verifying checksum..."
+              sha256sum -c "$CHECKSUM_FILE" || {
+                echo "Checksum verification failed, building locally instead"
+                cargo build --release
+                echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+                exit 0
+              }
+            else
+              echo "Warning: No checksum file found, skipping verification"
+            fi
+
+            mkdir -p test-lib
+            tar -xzf "$ARCHIVE" -C test-lib
+            echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+          fi
+        fi
+
+    - name: Download or build Rust library (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set +e  # Temporarily disable exit on error
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+          ARCH="aarch64"
+        elif [ "$ARCH" = "x86_64" ]; then
+          ARCH="x86_64"
+        fi
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        set -e  # Re-enable exit on error
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          ARCHIVE="libtokenizers-${ARCH}-apple-darwin.tar.gz"
+          gh release download $LATEST_RELEASE --pattern "$ARCHIVE"
+
+          # Verify download succeeded
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "Failed to download $ARCHIVE, building locally instead"
+            cargo build --release
+            echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+          else
+            # Download and verify checksum for supply chain security
+            CHECKSUM_FILE="${ARCHIVE}.sha256"
+            gh release download $LATEST_RELEASE --pattern "$CHECKSUM_FILE" || true
+
+            if [ -f "$CHECKSUM_FILE" ]; then
+              echo "Verifying checksum..."
+              shasum -a 256 -c "$CHECKSUM_FILE" || {
+                echo "Checksum verification failed, building locally instead"
+                cargo build --release
+                echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+                exit 0
+              }
+            else
+              echo "Warning: No checksum file found, skipping verification"
+            fi
+
+            mkdir -p test-lib
+            tar -xzf "$ARCHIVE" -C test-lib
+            echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.dylib" >> $GITHUB_ENV
+          fi
+        fi
+
+    - name: Download or build Rust library (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $ErrorActionPreference = "Continue"
+        $latestRelease = gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        $ErrorActionPreference = "Stop"
+        if ($latestRelease) {
+          $releaseTag = ($latestRelease -split "`t")[0]
+
+          # Validate that split succeeded
+          if (-not $releaseTag) {
+            Write-Host "Failed to parse release tag, building locally"
+            cargo build --release
+            "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            Write-Host "Using Rust release: $releaseTag"
+            $archive = "libtokenizers-x86_64-pc-windows-msvc.tar.gz"
+            gh release download $releaseTag --pattern $archive
+
+            # Verify download succeeded
+            if (-not (Test-Path $archive)) {
+              Write-Host "Failed to download $archive, building locally instead"
+              cargo build --release
+              "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+            } else {
+              # Download and verify checksum for supply chain security
+              $checksumFile = "${archive}.sha256"
+              gh release download $releaseTag --pattern $checksumFile 2>$null
+
+              if (Test-Path $checksumFile) {
+                Write-Host "Verifying checksum..."
+                $expectedHash = (Get-Content $checksumFile -Raw).Split()[0]
+                $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash
+
+                if ($expectedHash.ToLower() -ne $actualHash.ToLower()) {
+                  Write-Host "Checksum verification failed, building locally instead"
+                  cargo build --release
+                  "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+                  exit 0
+                }
+              } else {
+                Write-Host "Warning: No checksum file found, skipping verification"
+              }
+
+              New-Item -ItemType Directory -Force -Path test-lib
+              tar -xzf $archive -C test-lib
+              "TOKENIZERS_LIB_PATH=$(Get-Location)\test-lib\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+            }
+          }
+        } else {
+          Write-Host "No Rust release found, building locally"
+          cargo build --release
+          "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        }

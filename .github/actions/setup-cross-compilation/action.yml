@@ -1,0 +1,47 @@
+name: Setup Cross-Compilation
+description: Install cross-compilation tools and dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: Install cross-compilation dependencies (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          musl-tools \
+          g++-aarch64-linux-gnu \
+          libc6-dev-arm64-cross \
+          pkg-config
+
+    - name: Cache cross binary
+      uses: actions/cache@v4
+      id: cache-cross
+      with:
+        path: ~/.cargo/bin/cross
+        # Use a static key based on cross version from Cargo.lock (if available)
+        # Falls back to runner.os only for simpler cache management
+        key: ${{ runner.os }}-cross-v0.2.5
+        restore-keys: |
+          ${{ runner.os }}-cross-
+
+    - name: Check if cross is already installed
+      id: check-cross
+      shell: bash
+      run: |
+        if command -v cross &> /dev/null; then
+          echo "installed=true" >> $GITHUB_OUTPUT
+          echo "cross is already installed: $(cross --version)"
+        else
+          echo "installed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install cross
+      if: steps.check-cross.outputs.installed != 'true'
+      shell: bash
+      run: |
+        # Install cross from crates.io (stable release)
+        # Using --locked to ensure reproducible builds
+        cargo install cross --locked

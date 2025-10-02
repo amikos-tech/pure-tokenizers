@@ -1,0 +1,124 @@
+name: Build Rust Library
+description: Build Rust library for specified target
+
+# Usage examples:
+#   - Linux with cross (auto-detected):
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#
+#   - Linux with native cargo (skip cross):
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#       use-cross: 'false'
+#
+#   - Any platform with zigbuild:
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#       use-zigbuild: 'true'
+
+inputs:
+  target:
+    description: 'Rust target triple (e.g., x86_64-unknown-linux-gnu)'
+    required: true
+  use-cross:
+    description: |
+      Use cross for building. Options:
+        - 'auto' (default): Auto-detect - uses cross on Linux, native cargo elsewhere
+        - 'true': Force use of cross
+        - 'false': Force use of native cargo (skips cross even on Linux)
+    required: false
+    default: 'auto'
+  use-zigbuild:
+    description: 'Use cargo-zigbuild for building (overrides use-cross)'
+    required: false
+    default: 'false'
+
+outputs:
+  library-path:
+    description: 'Path to the built library file'
+    value: ${{ steps.set-lib-path.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Clean target directory (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: rm -rf target
+
+    - name: Clean target directory (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
+
+    - name: Build with cross (Linux)
+      if: runner.os == 'Linux' && (inputs.use-cross == 'true' || inputs.use-cross == 'auto') && inputs.use-zigbuild != 'true'
+      shell: bash
+      run: cross build --release --target ${{ inputs.target }}
+
+    - name: Build with zigbuild
+      if: inputs.use-zigbuild == 'true'
+      shell: bash
+      run: cargo zigbuild --release --target ${{ inputs.target }}
+
+    - name: Build with cargo (native)
+      # macOS/Windows with auto (default), or any platform when explicitly forcing native
+      # Note: Uses bash shell even on Windows (via Git Bash) for consistency
+      # with other build steps and cross-platform script compatibility
+      if: |
+        inputs.use-zigbuild != 'true' && (
+          inputs.use-cross == 'false' ||
+          (inputs.use-cross == 'auto' && runner.os != 'Linux')
+        )
+      shell: bash
+      run: cargo build --release --target ${{ inputs.target }}
+
+    - name: Set library path and verify
+      id: set-lib-path
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Determine library name based on target
+        # Note: Cargo.toml specifies crate-type = ["cdylib", "staticlib"]
+        # We use the shared library (.so/.dylib/.dll) for all platforms
+        case "${{ inputs.target }}" in
+          *-apple-darwin)
+            LIB_NAME="libtokenizers.dylib"
+            ;;
+          *-unknown-linux-gnu)
+            LIB_NAME="libtokenizers.so"
+            ;;
+          *-unknown-linux-musl)
+            # musl targets don't support cdylib, only staticlib
+            LIB_NAME="libtokenizers.a"
+            ;;
+          *-pc-windows-msvc)
+            LIB_NAME="tokenizers.dll"
+            ;;
+          *)
+            echo "Unknown target: ${{ inputs.target }}"
+            exit 1
+            ;;
+        esac
+
+        LIB_PATH="target/${{ inputs.target }}/release/${LIB_NAME}"
+
+        echo "Expecting library at: $LIB_PATH"
+
+        # Debug: List what's actually in the release directory
+        echo "Contents of target/${{ inputs.target }}/release/:"
+        ls -lh "target/${{ inputs.target }}/release/" | grep -E "libtokenizers|tokenizers" || echo "No matching files found"
+
+        if [ -f "$LIB_PATH" ]; then
+          echo "✓ Library found"
+          ls -lh "$LIB_PATH"
+          file "$LIB_PATH" || true
+          echo "path=$LIB_PATH" >> $GITHUB_OUTPUT
+        else
+          echo "✗ Library not found at: $LIB_PATH"
+          exit 1
+        fi
