@@ -185,7 +185,12 @@ func BenchmarkFromFile(b *testing.B) {
 	}
 }
 
+// BenchmarkFromHuggingFace measures tokenizer creation performance from HuggingFace Hub.
+// CreationOnly: measures just the FromHuggingFace call excluding Close() overhead
+// FullLifecycle: measures complete lifecycle including Close()
 func BenchmarkFromHuggingFace(b *testing.B) {
+	b.ReportAllocs()
+
 	originalCache := os.Getenv("HF_HUB_CACHE")
 	tmpDir := b.TempDir()
 	_ = os.Setenv("HF_HUB_CACHE", tmpDir)
@@ -206,13 +211,31 @@ func BenchmarkFromHuggingFace(b *testing.B) {
 	_ = tokenizer.Close()
 
 	b.ResetTimer()
-	for b.Loop() {
-		tokenizer, err := FromHuggingFace(modelID)
-		if err != nil {
-			b.Fatalf("Failed to load tokenizer: %v", err)
+
+	b.Run("CreationOnly", func(b *testing.B) {
+		tokenizers := make([]*Tokenizer, 0, b.N)
+		for b.Loop() {
+			tokenizer, err := FromHuggingFace(modelID)
+			if err != nil {
+				b.Fatalf("Failed to load tokenizer: %v", err)
+			}
+			tokenizers = append(tokenizers, tokenizer)
 		}
-		_ = tokenizer.Close()
-	}
+		b.StopTimer()
+		for _, tok := range tokenizers {
+			_ = tok.Close()
+		}
+	})
+
+	b.Run("FullLifecycle", func(b *testing.B) {
+		for b.Loop() {
+			tokenizer, err := FromHuggingFace(modelID)
+			if err != nil {
+				b.Fatalf("Failed to load tokenizer: %v", err)
+			}
+			_ = tokenizer.Close()
+		}
+	})
 }
 
 func BenchmarkVocabSize(b *testing.B) {
