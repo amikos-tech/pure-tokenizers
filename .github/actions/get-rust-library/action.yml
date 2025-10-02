@@ -18,7 +18,9 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        set +e  # Temporarily disable exit on error
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        set -e  # Re-enable exit on error
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
           cargo build --release
@@ -37,13 +39,15 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        set +e  # Temporarily disable exit on error
         ARCH=$(uname -m)
         if [ "$ARCH" = "arm64" ]; then
           ARCH="aarch64"
         elif [ "$ARCH" = "x86_64" ]; then
           ARCH="x86_64"
         fi
-        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        set -e  # Re-enable exit on error
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
           cargo build --release
@@ -62,7 +66,9 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        $latestRelease = gh release list --repo ${{ inputs.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        $ErrorActionPreference = "Continue"
+        $latestRelease = gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        $ErrorActionPreference = "Stop"
         if ($latestRelease) {
           $releaseTag = ($latestRelease -split "`t")[0]
           Write-Host "Using Rust release: $releaseTag"
