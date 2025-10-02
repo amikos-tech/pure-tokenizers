@@ -5,6 +5,9 @@ inputs:
   github-token:
     description: 'GitHub token for downloading releases'
     required: true
+  repository:
+    description: 'GitHub repository (owner/repo)'
+    required: true
 
 runs:
   using: composite
@@ -15,7 +18,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
           cargo build --release
@@ -40,7 +43,7 @@ runs:
         elif [ "$ARCH" = "x86_64" ]; then
           ARCH="x86_64"
         fi
-        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
           cargo build --release
@@ -59,7 +62,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        $latestRelease = gh release list --repo ${{ github.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        $latestRelease = gh release list --repo ${{ inputs.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
         if ($latestRelease) {
           $releaseTag = ($latestRelease -split "`t")[0]
           Write-Host "Using Rust release: $releaseTag"

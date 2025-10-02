@@ -41,6 +41,7 @@ jobs:
       uses: ./.github/actions/get-rust-library
       with:
         github-token: ${{ github.token }}
+        repository: ${{ github.repository }}
 
     - name: Run Go tests (Unix)
       if: matrix.os != 'windows-latest'

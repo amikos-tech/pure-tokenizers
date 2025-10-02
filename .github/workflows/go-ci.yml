@@ -52,6 +52,7 @@ jobs:
       uses: ./.github/actions/get-rust-library
       with:
         github-token: ${{ github.token }}
+        repository: ${{ github.repository }}
 
     - name: Run Go tests (Unix)
       if: matrix.os != 'windows-latest'
@@ -91,6 +92,7 @@ jobs:
       uses: ./.github/actions/get-rust-library
       with:
         github-token: ${{ github.token }}
+        repository: ${{ github.repository }}
 
     - name: Test download functionality
       run: |
@@ -123,6 +125,7 @@ jobs:
       uses: ./.github/actions/get-rust-library
       with:
         github-token: ${{ github.token }}
+        repository: ${{ github.repository }}
 
     - name: Run HuggingFace integration tests
       run: |
