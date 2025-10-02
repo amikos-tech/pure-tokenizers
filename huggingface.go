@@ -361,20 +361,19 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 		return nil, errors.New("offline mode enabled but tokenizer not found in any cache")
 	}
 
-	// Download tokenizer.json from HuggingFace
-	data, err := downloadTokenizerFromHF(modelID, tokenizer.hfConfig)
+	// Download tokenizer.json from HuggingFace directly to cache
+	err := downloadTokenizerFromHF(modelID, tokenizer.hfConfig, cachedPath)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to download tokenizer from HuggingFace")
 	}
 
-	// Save to cache
-	if err := saveToHFCache(cachedPath, data); err != nil {
-		// Log warning but don't fail
-		// In production, you might want to use a proper logger
-		_ = err
+	// Load from cache
+	data, err := os.ReadFile(cachedPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read cached tokenizer")
 	}
 
-	// Create tokenizer from downloaded data
+	// Create tokenizer from cached data
 	return FromBytes(data, opts...)
 }
 
@@ -469,7 +468,8 @@ func WithHFStreamingThreshold(threshold int64) TokenizerOption {
 }
 
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
-func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
+// and saves it directly to the cache path
+func downloadTokenizerFromHF(modelID string, config *HFConfig, cachePath string) error {
 	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, config.Revision)
 
 	var lastErr error
@@ -502,9 +502,9 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 			time.Sleep(delay)
 		}
 
-		data, resp, err := downloadWithRetryAndResponse(url, config)
+		resp, err := downloadWithRetryAndResponse(url, config, cachePath)
 		if err == nil {
-			return data, nil
+			return nil
 		}
 
 		lastErr = err
@@ -535,20 +535,19 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 		}
 	}
 
-	return nil, lastErr
+	return lastErr
 }
 
-// downloadWithRetryAndResponse performs a single download attempt and returns the response.
-// Unlike a simple download function, this returns the HTTP response alongside the data
-// to allow the caller to inspect response headers (e.g., Retry-After header for rate limiting).
-func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.Response, error) {
+// downloadWithRetryAndResponse performs a single download attempt and streams directly to the cache path.
+// Returns the HTTP response to allow the caller to inspect response headers (e.g., Retry-After header for rate limiting).
+func downloadWithRetryAndResponse(url string, config *HFConfig, cachePath string) (*http.Response, error) {
 	// Create a context with timeout for this specific request
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "failed to create request")
+		return nil, errors.Wrap(err, "failed to create request")
 	}
 
 	// Set headers
@@ -561,7 +560,7 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	client := getHFHTTPClient(config)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "request failed")
+		return nil, errors.Wrap(err, "request failed")
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -572,16 +571,16 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	case http.StatusOK:
 		// Success
 	case http.StatusUnauthorized:
-		return nil, resp, errors.New("authentication required: please set HF_TOKEN environment variable or use WithHFToken()")
+		return resp, errors.New("authentication required: please set HF_TOKEN environment variable or use WithHFToken()")
 	case http.StatusForbidden:
-		return nil, resp, errors.New("access forbidden: token may be invalid or model may be gated")
+		return resp, errors.New("access forbidden: token may be invalid or model may be gated")
 	case http.StatusNotFound:
-		return nil, resp, errors.New("model or tokenizer.json not found")
+		return resp, errors.New("model or tokenizer.json not found")
 	case http.StatusTooManyRequests:
 		// Return with response so caller can parse Retry-After
-		return nil, resp, errors.New("rate limited: too many requests")
+		return resp, errors.New("rate limited: too many requests")
 	default:
-		return nil, resp, errors.Errorf("unexpected status code: %d", resp.StatusCode)
+		return resp, errors.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Validate file size before downloading
@@ -592,7 +591,7 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 
 	if maxSize > 0 && resp.ContentLength > 0 {
 		if resp.ContentLength > maxSize {
-			return nil, resp, errors.Errorf("tokenizer file too large: %d bytes exceeds maximum %d bytes", resp.ContentLength, maxSize)
+			return resp, errors.Errorf("tokenizer file too large: %d bytes exceeds maximum %d bytes", resp.ContentLength, maxSize)
 		}
 
 		// Log warning in DEBUG mode if file is large (>100MB)
@@ -609,74 +608,102 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	}
 
 	// Check if we should use streaming (-1 disables streaming)
-	useStreaming := streamingThreshold >= 0 && resp.ContentLength > streamingThreshold
+	// For unknown content length (-1), use streaming as fallback for safety
+	useStreaming := streamingThreshold >= 0 && (resp.ContentLength == -1 || resp.ContentLength > streamingThreshold)
 
-	if os.Getenv("DEBUG") != "" && resp.ContentLength > 0 {
-		if useStreaming {
-			log.Printf("[DEBUG] Using streaming download for %d bytes (threshold: %d bytes)",
-				resp.ContentLength, streamingThreshold)
-		} else {
-			log.Printf("[DEBUG] Using in-memory download for %d bytes (threshold: %d bytes)",
-				resp.ContentLength, streamingThreshold)
+	if os.Getenv("DEBUG") != "" {
+		if resp.ContentLength > 0 {
+			if useStreaming {
+				log.Printf("[DEBUG] Using streaming download for %d bytes (threshold: %d bytes)",
+					resp.ContentLength, streamingThreshold)
+			} else {
+				log.Printf("[DEBUG] Using in-memory download for %d bytes (threshold: %d bytes)",
+					resp.ContentLength, streamingThreshold)
+			}
+		} else if resp.ContentLength == -1 {
+			log.Printf("[DEBUG] Using streaming download for unknown content length (chunked transfer)")
 		}
 	}
 
-	var data []byte
 	if useStreaming {
-		// Stream to temporary file, then read back
-		data, err = streamToTempFile(resp.Body)
+		// Stream directly to cache file
+		err = streamToCacheFile(resp.Body, cachePath)
 		if err != nil {
-			return nil, resp, errors.Wrap(err, "failed to stream response to temp file")
+			return resp, errors.Wrap(err, "failed to stream response to cache file")
 		}
 	} else {
-		// Load into memory (existing behavior for smaller files)
-		data, err = io.ReadAll(resp.Body)
+		// Load into memory for smaller files, then save to cache
+		data, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, resp, errors.Wrap(err, "failed to read response")
+			return resp, errors.Wrap(err, "failed to read response")
+		}
+
+		// Validate it's valid JSON
+		var validateJSON map[string]interface{}
+		if err := json.Unmarshal(data, &validateJSON); err != nil {
+			return resp, errors.Wrap(err, "invalid tokenizer.json format")
+		}
+
+		// Save to cache
+		if err := saveToHFCache(cachePath, data); err != nil {
+			return resp, errors.Wrap(err, "failed to save to cache")
 		}
 	}
 
-	// Validate it's valid JSON
-	var validateJSON map[string]interface{}
-	if err := json.Unmarshal(data, &validateJSON); err != nil {
-		return nil, resp, errors.Wrap(err, "invalid tokenizer.json format")
-	}
-
-	return data, resp, nil
+	return resp, nil
 }
 
-// streamToTempFile streams the response body to a temporary file and returns the data.
-// This is more memory-efficient for large downloads.
-func streamToTempFile(body io.Reader) ([]byte, error) {
-	// Create a temporary file in the same directory as the final cache location
-	// to ensure atomic rename works (same filesystem)
-	tempFile, err := os.CreateTemp("", "tokenizer-download-*.json")
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create temp file")
+// streamToCacheFile streams the response body directly to the cache file.
+// This is memory-efficient for large downloads as it avoids loading the entire file into memory.
+func streamToCacheFile(body io.Reader, cachePath string) error {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return errors.Wrap(err, "failed to create cache directory")
 	}
+
+	// Create temporary file in the same directory as the final cache location
+	// to ensure atomic rename works (same filesystem)
+	cacheDir := filepath.Dir(cachePath)
+	tempFile, err := os.CreateTemp(cacheDir, "tokenizer-download-*.json")
+	if err != nil {
+		return errors.Wrap(err, "failed to create temp file")
+	}
+	tempPath := tempFile.Name()
 	defer func() {
 		_ = tempFile.Close()
-		_ = os.Remove(tempFile.Name()) // Clean up temp file
+		_ = os.Remove(tempPath) // Clean up temp file on error
 	}()
 
 	// Stream response body to temp file
 	_, err = io.Copy(tempFile, body)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to copy response to temp file")
+		return errors.Wrap(err, "failed to copy response to temp file")
 	}
 
-	// Seek back to beginning to read the file
-	if _, err := tempFile.Seek(0, 0); err != nil {
-		return nil, errors.Wrap(err, "failed to seek temp file")
+	// Close the file before validation
+	if err := tempFile.Close(); err != nil {
+		return errors.Wrap(err, "failed to close temp file")
 	}
 
-	// Read the file contents
-	data, err := io.ReadAll(tempFile)
+	// Validate it's valid JSON by reading just the structure (not the entire content)
+	file, err := os.Open(tempPath)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read temp file")
+		return errors.Wrap(err, "failed to open temp file for validation")
+	}
+	defer func() { _ = file.Close() }()
+
+	decoder := json.NewDecoder(file)
+	var validateJSON map[string]interface{}
+	if err := decoder.Decode(&validateJSON); err != nil {
+		return errors.Wrap(err, "invalid tokenizer.json format")
 	}
 
-	return data, nil
+	// Atomic rename to final location
+	if err := os.Rename(tempPath, cachePath); err != nil {
+		return errors.Wrap(err, "failed to rename temp file to cache location")
+	}
+
+	return nil
 }
 
 // validateModelID checks if the model ID is valid

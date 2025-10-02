@@ -284,7 +284,8 @@ func TestNetworkTimeouts(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		errMsg := strings.ToLower(err.Error())
 		assert.True(t, strings.Contains(errMsg, "timeout") ||
@@ -305,7 +306,8 @@ func TestNetworkTimeouts(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 
@@ -321,7 +323,8 @@ func TestNetworkTimeouts(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 }
@@ -371,7 +374,12 @@ func TestHTTPErrorCodes(t *testing.T) {
 				MaxRetries: defaultMaxRetries,
 			}
 
-			data, err := downloadTokenizerFromHF("test-model", config)
+			cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+			err := downloadTokenizerFromHF("test-model", config, cachePath)
+			var data []byte
+			if err == nil {
+				data, err = os.ReadFile(cachePath)
+			}
 
 			if tc.shouldRetry {
 				// Should succeed after retries
@@ -411,7 +419,12 @@ func TestRateLimiting(t *testing.T) {
 		}
 
 		start := time.Now()
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		duration := time.Since(start)
 
 		require.NoError(t, err)
@@ -436,7 +449,12 @@ func TestRateLimiting(t *testing.T) {
 			MaxRetries: mediumMaxRetries,
 		}
 
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 
 		require.NoError(t, err)
 		assert.NotNil(t, data)
@@ -457,7 +475,8 @@ func TestRateLimiting(t *testing.T) {
 			MaxRetries: defaultMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "rate limit")
 	})
@@ -475,7 +494,12 @@ func TestRateLimiting(t *testing.T) {
 			MaxRetries: defaultMaxRetries,
 		}
 
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, data)
 	})
@@ -523,7 +547,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 
@@ -539,7 +564,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "invalid")
 	})
@@ -556,7 +582,8 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 
@@ -572,7 +599,12 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 			MaxRetries: defaultMaxRetries,
 		}
 
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, data)
 		assert.Equal(t, int32(3), server.GetRequestCount())
@@ -602,7 +634,8 @@ func TestContentLengthValidation(t *testing.T) {
 			MaxTokenizerSize: DefaultMaxTokenizerSize,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "too large")
 	})
@@ -620,7 +653,8 @@ func TestContentLengthValidation(t *testing.T) {
 			MaxTokenizerSize: 1024, // Very small limit
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "too large")
 	})
@@ -639,7 +673,8 @@ func TestContentLengthValidation(t *testing.T) {
 
 		// The server will return wrong Content-Length header
 		// The download may succeed or fail depending on how the client handles it
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		// Don't assert success or failure - just verify it doesn't panic
 		// Some HTTP clients validate Content-Length strictly, others don't
 		if err != nil {
@@ -671,7 +706,8 @@ func TestAuthenticationFailures(t *testing.T) {
 			Token:      "", // No token
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "authentication")
 		// Should not retry auth errors
@@ -691,7 +727,8 @@ func TestAuthenticationFailures(t *testing.T) {
 			Token:      "invalid_token",
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "authentication")
 	})
@@ -735,7 +772,12 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 				}
 
 				modelID := fmt.Sprintf("test-model-%d", id)
-				data, err := downloadTokenizerFromHF(modelID, config)
+				cachePath := filepath.Join(t.TempDir(), fmt.Sprintf("tokenizer-%s.json", modelID))
+				err := downloadTokenizerFromHF(modelID, config, cachePath)
+				var data []byte
+				if err == nil {
+					data, err = os.ReadFile(cachePath)
+				}
 				successChan <- (err == nil && data != nil)
 			}(i)
 		}
@@ -782,7 +824,12 @@ func TestSlowNetworkConditions(t *testing.T) {
 		}
 
 		start := time.Now()
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		duration := time.Since(start)
 
 		require.NoError(t, err)
@@ -802,7 +849,8 @@ func TestSlowNetworkConditions(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 }
@@ -829,7 +877,12 @@ func TestConnectionResetScenarios(t *testing.T) {
 			MaxRetries: defaultMaxRetries,
 		}
 
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, data)
 		assert.GreaterOrEqual(t, server.GetRequestCount(), int32(3))
@@ -872,7 +925,11 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		data, err = downloadTokenizerFromHF(modelID, config)
+		cachePath2 := filepath.Join(t.TempDir(), "tokenizer-2.json")
+		err = downloadTokenizerFromHF(modelID, config, cachePath2)
+		if err == nil {
+			data, err = os.ReadFile(cachePath2)
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, data)
 	})
@@ -898,7 +955,12 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		}
 
 		// Download should succeed but cache write may fail
-		data, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err = downloadTokenizerFromHF("test-model", config, cachePath)
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(cachePath)
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, data)
 		t.Log("Download succeeded despite cache write failure")
@@ -925,7 +987,10 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		}
 
 		// First download should succeed and cache
-		data1, err := downloadTokenizerFromHF("test-model-cachefail", config)
+		cachePath1 := filepath.Join(writableDir, "tokenizer-1.json")
+		err = downloadTokenizerFromHF("test-model-cachefail", config, cachePath1)
+		require.NoError(t, err)
+		data1, err := os.ReadFile(cachePath1)
 		require.NoError(t, err)
 		assert.NotNil(t, data1)
 
@@ -935,7 +1000,10 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		defer func() { _ = os.Chmod(writableDir, 0755) }()
 
 		// Second download for different model should still succeed even if cache write fails
-		data2, err := downloadTokenizerFromHF("test-model-cachefail-2", config)
+		cachePath2 := filepath.Join(writableDir, "tokenizer-2.json")
+		err = downloadTokenizerFromHF("test-model-cachefail-2", config, cachePath2)
+		require.NoError(t, err)
+		data2, err := os.ReadFile(cachePath2)
 		require.NoError(t, err)
 		assert.NotNil(t, data2)
 		t.Log("Download succeeded even when cache directory is read-only")
@@ -973,7 +1041,8 @@ func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 		}
 
 		modelID := fmt.Sprintf("bench-model-%d", i)
-		_, _ = downloadTokenizerFromHF(modelID, config)
+		cachePath := filepath.Join(tempDir, fmt.Sprintf("bench-%d.json", i))
+		_ = downloadTokenizerFromHF(modelID, config, cachePath)
 	}
 }
 
@@ -1004,7 +1073,8 @@ func BenchmarkConcurrentDownloadsWithFailures(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			modelID := fmt.Sprintf("bench-model-%d", i)
-			_, _ = downloadTokenizerFromHF(modelID, config)
+			cachePath := filepath.Join(tempDir, fmt.Sprintf("bench-%s.json", modelID))
+			_ = downloadTokenizerFromHF(modelID, config, cachePath)
 			i++
 		}
 	})
@@ -1027,7 +1097,8 @@ func TestDialerFailures(t *testing.T) {
 			MaxRetries: mediumMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "connection")
 	})
@@ -1044,7 +1115,8 @@ func TestDialerFailures(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 	})
 }
@@ -1109,7 +1181,8 @@ func TestContextCancellation(t *testing.T) {
 		}()
 
 		go func() {
-			_, err := downloadTokenizerFromHF("test-model", config)
+			cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 			errChan <- err
 		}()
 
@@ -1186,7 +1259,8 @@ func TestErrorMessageQuality(t *testing.T) {
 				MaxRetries: shortMaxRetries,
 			}
 
-			_, err := downloadTokenizerFromHF("test-model", config)
+			cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 			require.Error(t, err)
 
 			errMsg := strings.ToLower(err.Error())
@@ -1214,7 +1288,8 @@ func TestDNSFailures(t *testing.T) {
 			MaxRetries: shortMaxRetries,
 		}
 
-		_, err := downloadTokenizerFromHF("test-model", config)
+		cachePath := filepath.Join(t.TempDir(), "tokenizer.json")
+		err := downloadTokenizerFromHF("test-model", config, cachePath)
 		require.Error(t, err)
 
 		// Check for DNS or connection error

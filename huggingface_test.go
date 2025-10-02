@@ -537,13 +537,17 @@ func TestDownloadWithRetry(t *testing.T) {
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
+		CacheDir:   t.TempDir(),
 	}
 
 	// Use downloadTokenizerFromHF which has the retry logic
-	data, err := downloadTokenizerFromHF("test-model", config)
+	cachePath := filepath.Join(config.CacheDir, "tokenizer.json")
+	err := downloadTokenizerFromHF("test-model", config, cachePath)
 	require.NoError(t, err)
 
 	// Verify valid JSON
+	data, err := os.ReadFile(cachePath)
+	require.NoError(t, err)
 	var result map[string]interface{}
 	err = json.Unmarshal(data, &result)
 	assert.NoError(t, err)
@@ -655,12 +659,17 @@ func TestConcurrentDownloads(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			modelID := fmt.Sprintf("test-model-%d", id)
-			data, err := downloadTokenizerFromHF(modelID, config)
+			cachePath := filepath.Join(t.TempDir(), fmt.Sprintf("tokenizer-%d.json", id))
+			err := downloadTokenizerFromHF(modelID, config, cachePath)
 			if err != nil {
 				errors[id] = err
 			}
 			assert.NoError(t, err, "Download %d should succeed", id)
-			assert.NotNil(t, data, "Data for download %d should not be nil", id)
+			if err == nil {
+				data, readErr := os.ReadFile(cachePath)
+				assert.NoError(t, readErr)
+				assert.NotNil(t, data, "Data for download %d should not be nil", id)
+			}
 		}(i)
 	}
 
@@ -746,9 +755,14 @@ func TestConnectionReuse(t *testing.T) {
 	// Make multiple sequential requests
 	const numRequests = 3
 	for i := 0; i < numRequests; i++ {
-		data, err := downloadTokenizerFromHF(fmt.Sprintf("model-%d", i), config)
+		cachePath := filepath.Join(t.TempDir(), fmt.Sprintf("model-%d.json", i))
+		err := downloadTokenizerFromHF(fmt.Sprintf("model-%d", i), config, cachePath)
 		assert.NoError(t, err, "Request %d should succeed", i)
-		assert.NotNil(t, data, "Data for request %d should not be nil", i)
+		if err == nil {
+			data, readErr := os.ReadFile(cachePath)
+			assert.NoError(t, readErr)
+			assert.NotNil(t, data, "Data for request %d should not be nil", i)
+		}
 
 		// Small delay to ensure connection pooling has time to work
 		if i < numRequests-1 {
@@ -878,10 +892,14 @@ func TestRetryAfterHeader(t *testing.T) {
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
+		CacheDir:   t.TempDir(),
 	}
 
 	// Call the function with retry logic
-	data, err := downloadTokenizerFromHF("test-model", config)
+	cachePath := filepath.Join(config.CacheDir, "tokenizer.json")
+	err := downloadTokenizerFromHF("test-model", config, cachePath)
+	require.NoError(t, err)
+	data, err := os.ReadFile(cachePath)
 	require.NoError(t, err)
 	assert.NotNil(t, data)
 
@@ -927,10 +945,13 @@ func TestRetryAfterWithHTTPDate(t *testing.T) {
 		Revision:   "main",
 	}
 
+	cachePath := filepath.Join(config.CacheDir, "tokenizer.json")
 	startTime := time.Now()
-	data, err := downloadTokenizerFromHF("test-model", config)
+	err := downloadTokenizerFromHF("test-model", config, cachePath)
 	duration := time.Since(startTime)
 
+	require.NoError(t, err)
+	data, err := os.ReadFile(cachePath)
 	require.NoError(t, err)
 	assert.NotNil(t, data)
 
@@ -978,10 +999,14 @@ func TestFallbackToExponentialBackoff(t *testing.T) {
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
+		CacheDir:   t.TempDir(),
 	}
 
 	// Call the function with retry logic
-	data, err := downloadTokenizerFromHF("test-model", config)
+	cachePath := filepath.Join(config.CacheDir, "tokenizer.json")
+	err := downloadTokenizerFromHF("test-model", config, cachePath)
+	require.NoError(t, err)
+	data, err := os.ReadFile(cachePath)
 	require.NoError(t, err)
 	assert.NotNil(t, data)
 
@@ -1347,7 +1372,7 @@ func TestGetEnvDuration(t *testing.T) {
 		})
 	}
 }
-func TestStreamToTempFile(t *testing.T) {
+func TestStreamToCacheFile(t *testing.T) {
 	testCases := []struct {
 		name    string
 		data    string
@@ -1364,23 +1389,27 @@ func TestStreamToTempFile(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "EmptyData",
-			data:    "",
-			wantErr: false,
+			name:    "InvalidJSON",
+			data:    `{not valid json}`,
+			wantErr: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			reader := strings.NewReader(tc.data)
-			
-			result, err := streamToTempFile(reader)
-			
+			cachePath := filepath.Join(t.TempDir(), "test-cache.json")
+
+			err := streamToCacheFile(reader, cachePath)
+
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tc.data, string(result))
+				// Verify file was created
+				data, err := os.ReadFile(cachePath)
+				require.NoError(t, err)
+				assert.Equal(t, tc.data, string(data))
 			}
 		})
 	}
@@ -1401,8 +1430,14 @@ func TestStreamingThreshold(t *testing.T) {
 			t.Skipf("Skipping test, download failed: %v", err)
 		}
 		defer func() { _ = tokenizer.Close() }()
-		
+
 		assert.NotNil(t, tokenizer)
+
+		// Verify encoding works
+		result, err := tokenizer.Encode("Hello, world!")
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotEmpty(t, result.IDs)
 	})
 
 	t.Run("DisableStreaming", func(t *testing.T) {
@@ -1414,8 +1449,14 @@ func TestStreamingThreshold(t *testing.T) {
 			t.Skipf("Skipping test, download failed: %v", err)
 		}
 		defer func() { _ = tokenizer.Close() }()
-		
+
 		assert.NotNil(t, tokenizer)
+
+		// Verify encoding works
+		result, err := tokenizer.Encode("Hello, world!")
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotEmpty(t, result.IDs)
 	})
 
 	t.Run("LowThreshold", func(t *testing.T) {
@@ -1427,8 +1468,14 @@ func TestStreamingThreshold(t *testing.T) {
 			t.Skipf("Skipping test, download failed: %v", err)
 		}
 		defer func() { _ = tokenizer.Close() }()
-		
+
 		assert.NotNil(t, tokenizer)
+
+		// Verify encoding works
+		result, err := tokenizer.Encode("Hello, world!")
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotEmpty(t, result.IDs)
 	})
 }
 
@@ -1450,7 +1497,7 @@ func TestWithHFStreamingThreshold(t *testing.T) {
 			tok := &Tokenizer{}
 			opt := WithHFStreamingThreshold(tc.threshold)
 			err := opt(tok)
-			
+
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -1459,4 +1506,49 @@ func TestWithHFStreamingThreshold(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDownloadWithChunkedEncoding(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Mock server that returns chunked transfer encoding (ContentLength = -1)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't set Content-Length header - this makes Go use chunked encoding
+		w.Header().Set("Content-Type", "application/json")
+		// Write chunked response
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"version":"1.0","truncation":null,"padding":null}`))
+	}))
+	defer mockServer.Close()
+
+	// Override HFHubBaseURL for this test
+	originalURL := HFHubBaseURL
+	HFHubBaseURL = mockServer.URL
+	defer func() { HFHubBaseURL = originalURL }()
+
+	config := &HFConfig{
+		Timeout:            5 * time.Second,
+		MaxRetries:         3,
+		Revision:           "main",
+		CacheDir:           tempDir,
+		StreamingThreshold: 0, // Use default threshold
+	}
+
+	// Test that chunked encoding triggers streaming
+	cachePath := filepath.Join(tempDir, "tokenizer.json")
+	resp, err := downloadWithRetryAndResponse(mockServer.URL+"/test-model/resolve/main/tokenizer.json", config, cachePath)
+
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+
+	// Verify file was created
+	_, err = os.Stat(cachePath)
+	assert.NoError(t, err)
+
+	// Verify file contents are valid JSON
+	data, err := os.ReadFile(cachePath)
+	require.NoError(t, err)
+	var result map[string]interface{}
+	err = json.Unmarshal(data, &result)
+	assert.NoError(t, err)
 }
