@@ -484,7 +484,7 @@ func TestClearHFCachePattern(t *testing.T) {
 		// Invalid glob syntax (unclosed bracket)
 		cleared, err := ClearHFCachePattern("[invalid")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid pattern")
+		assert.Contains(t, err.Error(), "invalid glob pattern")
 		assert.Equal(t, 0, cleared)
 	})
 

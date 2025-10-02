@@ -37,6 +37,11 @@ func main() {
 	if err := clearModelCache(); err != nil {
 		log.Printf("Clear cache example failed: %v\n", err)
 	}
+
+	// Example 6: Clear cache with glob patterns
+	if err := clearCachePatterns(); err != nil {
+		log.Printf("Clear cache patterns example failed: %v\n", err)
+	}
 }
 
 func downloadAndCache() error {
@@ -242,6 +247,97 @@ func clearModelCache() error {
 	// Note about clearing all cache
 	fmt.Println("Note: To clear ALL HuggingFace cache (use with caution):")
 	fmt.Println("  err := tokenizers.ClearHFCache()")
+	fmt.Println()
+
+	return nil
+}
+
+func clearCachePatterns() error {
+	fmt.Println("6. Clear Cache with Glob Patterns")
+	fmt.Println("=" + "=" + "=" + "=" + "=" + "=" + "=" + "=" + "=")
+
+	// First, download some models to demonstrate pattern clearing
+	models := []string{
+		"bert-base-uncased",
+		"bert-large-uncased",
+		"gpt2",
+		"gpt2-medium",
+	}
+
+	fmt.Println("Ensuring test models are cached...")
+	for _, model := range models {
+		tok, err := tokenizers.FromHuggingFace(model)
+		if err != nil {
+			fmt.Printf("  Skipping %s: %v\n", model, err)
+			continue
+		}
+		tok.Close()
+		fmt.Printf("  ✓ %s cached\n", model)
+	}
+	fmt.Println()
+
+	// Example 1: Clear all BERT variants
+	fmt.Println("Clearing all BERT model variants (bert-*):")
+	cleared, err := tokenizers.ClearHFCachePattern("bert-*")
+	if err != nil {
+		return fmt.Errorf("failed to clear BERT models: %w", err)
+	}
+	fmt.Printf("  Cleared %d BERT model(s)\n\n", cleared)
+
+	// Example 2: Clear specific pattern
+	fmt.Println("Clearing GPT2 variants (gpt2-*):")
+	cleared, err = tokenizers.ClearHFCachePattern("gpt2-*")
+	if err != nil {
+		return fmt.Errorf("failed to clear GPT2 variants: %w", err)
+	}
+	fmt.Printf("  Cleared %d GPT2 variant(s)\n\n", cleared)
+
+	// Example 3: Show wildcard matching
+	fmt.Println("Pattern matching examples:")
+	patterns := []string{
+		"*",        // All models
+		"*/*",      // All organization-prefixed models (e.g., huggingface/*)
+		"bert-?ase-*", // bert-base-*, bert-case-* (using ? for single char)
+	}
+
+	for _, pattern := range patterns {
+		fmt.Printf("  Pattern '%s': ", pattern)
+		// Don't actually clear with '*' to avoid removing all models
+		if pattern == "*" {
+			fmt.Println("(would clear all models - skipped for safety)")
+		} else {
+			cleared, err := tokenizers.ClearHFCachePattern(pattern)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else {
+				fmt.Printf("would clear %d model(s)\n", cleared)
+			}
+		}
+	}
+	fmt.Println()
+
+	// Security demonstration
+	fmt.Println("Security features:")
+	insecurePatterns := []string{
+		"../etc/passwd",   // Directory traversal
+		"/absolute/path",  // Absolute path
+	}
+
+	for _, pattern := range insecurePatterns {
+		fmt.Printf("  Testing pattern '%s': ", pattern)
+		_, err := tokenizers.ClearHFCachePattern(pattern)
+		if err != nil {
+			fmt.Printf("✓ Rejected (secure)\n")
+		} else {
+			fmt.Printf("✗ Accepted (insecure!)\n")
+		}
+	}
+	fmt.Println()
+
+	fmt.Println("Best practices:")
+	fmt.Println("  • Use specific patterns to avoid accidental deletions")
+	fmt.Println("  • Test patterns with dry-run logic before clearing")
+	fmt.Println("  • Check the returned count to verify expected matches")
 	fmt.Println()
 
 	return nil

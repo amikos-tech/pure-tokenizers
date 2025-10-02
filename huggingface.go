@@ -781,6 +781,11 @@ func ClearHFCachePattern(pattern string) (int, error) {
 		return 0, errors.New("invalid pattern: directory traversal and absolute paths not allowed")
 	}
 
+	// Validate pattern syntax upfront for faster failure
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return 0, errors.Wrapf(err, "invalid glob pattern: %s", pattern)
+	}
+
 	cacheDir := getHFCacheDir()
 	modelsDir := filepath.Join(cacheDir, "models")
 
@@ -794,7 +799,7 @@ func ClearHFCachePattern(pattern string) (int, error) {
 	}
 
 	cleared := 0
-	var errs []error
+	var errs []string
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -805,16 +810,13 @@ func ClearHFCachePattern(pattern string) (int, error) {
 		modelID := strings.ReplaceAll(entry.Name(), "--", "/")
 
 		// Check if model ID matches the glob pattern
-		matched, err := filepath.Match(pattern, modelID)
-		if err != nil {
-			errs = append(errs, errors.Wrapf(err, "invalid pattern for model %s", modelID))
-			continue
-		}
+		// Pattern already validated above, so err should never occur here
+		matched, _ := filepath.Match(pattern, modelID)
 
 		if matched {
 			modelCacheDir := filepath.Join(modelsDir, entry.Name())
 			if err := os.RemoveAll(modelCacheDir); err != nil {
-				errs = append(errs, errors.Wrapf(err, "failed to clear cache for %s", modelID))
+				errs = append(errs, fmt.Sprintf("failed to clear %s: %v", modelID, err))
 			} else {
 				cleared++
 			}
@@ -822,7 +824,12 @@ func ClearHFCachePattern(pattern string) (int, error) {
 	}
 
 	if len(errs) > 0 {
-		return cleared, errors.Errorf("cleared %d entries with %d errors: %v", cleared, len(errs), errs)
+		// Format error messages individually for better readability
+		errMsg := fmt.Sprintf("cleared %d entries with %d errors:\n", cleared, len(errs))
+		for i, e := range errs {
+			errMsg += fmt.Sprintf("  %d. %s\n", i+1, e)
+		}
+		return cleared, errors.New(strings.TrimSpace(errMsg))
 	}
 
 	return cleared, nil
