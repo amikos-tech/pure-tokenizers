@@ -33,7 +33,7 @@ runs:
       run: Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
 
     - name: Build with cross (Linux)
-      if: runner.os == 'Linux' && (inputs.use-cross == 'true' || inputs.use-cross == 'auto')
+      if: runner.os == 'Linux' && (inputs.use-cross == 'true' || inputs.use-cross == 'auto') && inputs.use-zigbuild != 'true'
       shell: bash
       run: cross build --release --target ${{ inputs.target }}
 
@@ -43,7 +43,7 @@ runs:
       run: cargo zigbuild --release --target ${{ inputs.target }}
 
     - name: Build with cargo (native)
-      if: (runner.os == 'macOS' || runner.os == 'Windows') && inputs.use-zigbuild == 'false'
+      if: (runner.os == 'macOS' || runner.os == 'Windows') && inputs.use-zigbuild != 'true' && (inputs.use-cross != 'true' && inputs.use-cross != 'auto')
       shell: bash
       run: cargo build --release --target ${{ inputs.target }}
 
