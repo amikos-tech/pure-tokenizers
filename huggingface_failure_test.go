@@ -966,7 +966,7 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		t.Log("Download succeeded despite cache write failure")
 	})
 
-	t.Run("Cache write failure with successful download", func(t *testing.T) {
+	t.Run("Cache write failure with read-only directory", func(t *testing.T) {
 		if os.Getuid() == 0 {
 			t.Skip("Skipping test when running as root")
 		}
@@ -999,14 +999,13 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = os.Chmod(writableDir, 0755) }()
 
-		// Second download for different model should still succeed even if cache write fails
+		// Second download for different model should now fail because cache directory is read-only
+		// This is expected behavior with streaming downloads that write directly to cache
 		cachePath2 := filepath.Join(writableDir, "tokenizer-2.json")
 		err = downloadTokenizerFromHF("test-model-cachefail-2", config, cachePath2)
-		require.NoError(t, err)
-		data2, err := os.ReadFile(cachePath2)
-		require.NoError(t, err)
-		assert.NotNil(t, data2)
-		t.Log("Download succeeded even when cache directory is read-only")
+		require.Error(t, err, "Expected error when cache directory is read-only")
+		assert.Contains(t, err.Error(), "permission denied")
+		t.Log("Download correctly failed when cache directory is read-only")
 	})
 }
 
