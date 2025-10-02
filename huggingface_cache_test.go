@@ -170,19 +170,24 @@ func isExpectedConcurrentCacheError(err error) bool {
 		return false
 	}
 
-	errMsg := err.Error()
-	errMsgLower := strings.ToLower(errMsg)
-
-	// File not found (including wrapped errors and OS-specific messages)
+	// Check sentinel errors first (no string conversion needed)
 	if errors.Is(err, os.ErrNotExist) ||
 		errors.Is(err, ErrCacheNotFound) ||
-		strings.Contains(errMsgLower, "cannot find the file") ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	// Convert to lowercase once for all string-based checks
+	errMsgLower := strings.ToLower(err.Error())
+
+	// File not found (OS-specific messages)
+	if strings.Contains(errMsgLower, "cannot find the file") ||
 		strings.Contains(errMsgLower, "no such file") {
 		return true
 	}
 
 	// Partial reads during concurrent access
-	if strings.Contains(errMsgLower, "unexpected end of json") || errors.Is(err, io.ErrUnexpectedEOF) {
+	if strings.Contains(errMsgLower, "unexpected end of json") {
 		return true
 	}
 
