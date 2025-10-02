@@ -764,6 +764,70 @@ func ClearHFCache() error {
 	return os.RemoveAll(modelsDir)
 }
 
+// ClearHFCachePattern clears cache entries matching a glob pattern.
+// The pattern is matched against model IDs (e.g., "bert-*", "huggingface/*").
+// Patterns use standard glob syntax: * matches any sequence, ? matches any single character.
+//
+// Examples:
+//   - "bert-*" matches all BERT model variants
+//   - "huggingface/*" matches all models from the huggingface organization
+//   - "*/tokenizer" matches any model ending with "/tokenizer"
+//
+// For security, patterns containing ".." or absolute paths are rejected.
+// Returns the number of cache entries cleared and any error encountered.
+func ClearHFCachePattern(pattern string) (int, error) {
+	// Security: prevent directory traversal attempts
+	if strings.Contains(pattern, "..") || filepath.IsAbs(pattern) {
+		return 0, errors.New("invalid pattern: directory traversal and absolute paths not allowed")
+	}
+
+	cacheDir := getHFCacheDir()
+	modelsDir := filepath.Join(cacheDir, "models")
+
+	if _, err := os.Stat(modelsDir); os.IsNotExist(err) {
+		return 0, nil // Cache directory doesn't exist
+	}
+
+	entries, err := os.ReadDir(modelsDir)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to read cache directory")
+	}
+
+	cleared := 0
+	var errs []error
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Convert sanitized directory name back to model ID (-- → /)
+		modelID := strings.ReplaceAll(entry.Name(), "--", "/")
+
+		// Check if model ID matches the glob pattern
+		matched, err := filepath.Match(pattern, modelID)
+		if err != nil {
+			errs = append(errs, errors.Wrapf(err, "invalid pattern for model %s", modelID))
+			continue
+		}
+
+		if matched {
+			modelCacheDir := filepath.Join(modelsDir, entry.Name())
+			if err := os.RemoveAll(modelCacheDir); err != nil {
+				errs = append(errs, errors.Wrapf(err, "failed to clear cache for %s", modelID))
+			} else {
+				cleared++
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return cleared, errors.Errorf("cleared %d entries with %d errors: %v", cleared, len(errs), errs)
+	}
+
+	return cleared, nil
+}
+
 // parseRetryAfter parses the Retry-After header value.
 // It can be either a delay in seconds or an HTTP date.
 // The returned duration is capped at HFMaxRetryAfterDelay to prevent excessive waits.
