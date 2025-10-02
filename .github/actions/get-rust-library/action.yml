@@ -1,0 +1,74 @@
+name: Get Rust Library
+description: Download latest Rust library release or build locally as fallback
+
+inputs:
+  github-token:
+    description: 'GitHub token for downloading releases'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download or build Rust library (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-x86_64-unknown-linux-gnu.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.so" >> $GITHUB_ENV
+        fi
+
+    - name: Download or build Rust library (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+          ARCH="aarch64"
+        elif [ "$ARCH" = "x86_64" ]; then
+          ARCH="x86_64"
+        fi
+        LATEST_RELEASE=$(gh release list --repo ${{ github.repository }} --limit 10 | grep -E "^rust-v" | head -1 | cut -f1)
+        if [ -z "$LATEST_RELEASE" ]; then
+          echo "No Rust release found, building locally"
+          cargo build --release
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
+        else
+          echo "Using Rust release: $LATEST_RELEASE"
+          gh release download $LATEST_RELEASE --pattern "libtokenizers-${ARCH}-apple-darwin.tar.gz"
+          mkdir -p test-lib
+          tar -xzf libtokenizers-${ARCH}-apple-darwin.tar.gz -C test-lib
+          echo "TOKENIZERS_LIB_PATH=$(pwd)/test-lib/libtokenizers.dylib" >> $GITHUB_ENV
+        fi
+
+    - name: Download or build Rust library (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $latestRelease = gh release list --repo ${{ github.repository }} --limit 10 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        if ($latestRelease) {
+          $releaseTag = ($latestRelease -split "`t")[0]
+          Write-Host "Using Rust release: $releaseTag"
+          gh release download $releaseTag --pattern "libtokenizers-x86_64-pc-windows-msvc.tar.gz"
+          New-Item -ItemType Directory -Force -Path test-lib
+          tar -xzf libtokenizers-x86_64-pc-windows-msvc.tar.gz -C test-lib
+          "TOKENIZERS_LIB_PATH=$(Get-Location)\test-lib\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+          Write-Host "No Rust release found, building locally"
+          cargo build --release
+          "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+        }

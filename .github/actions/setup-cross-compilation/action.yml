@@ -1,0 +1,21 @@
+name: Setup Cross-Compilation
+description: Install cross-compilation tools and dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: Install cross-compilation dependencies (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          musl-tools \
+          g++-aarch64-linux-gnu \
+          libc6-dev-arm64-cross \
+          pkg-config
+
+    - name: Install cross
+      shell: bash
+      run: cargo install cross --git https://github.com/cross-rs/cross

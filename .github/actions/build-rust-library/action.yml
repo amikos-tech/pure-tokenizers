@@ -1,0 +1,87 @@
+name: Build Rust Library
+description: Build Rust library for specified target
+
+inputs:
+  target:
+    description: 'Rust target triple (e.g., x86_64-unknown-linux-gnu)'
+    required: true
+  use-cross:
+    description: 'Use cross for building (default: auto-detect for Linux)'
+    required: false
+    default: 'auto'
+  use-zigbuild:
+    description: 'Use cargo-zigbuild for building'
+    required: false
+    default: 'false'
+
+outputs:
+  library-path:
+    description: 'Path to the built library file'
+    value: ${{ steps.set-lib-path.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Clean target directory (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: rm -rf target
+
+    - name: Clean target directory (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
+
+    - name: Build with cross (Linux)
+      if: runner.os == 'Linux' && (inputs.use-cross == 'true' || inputs.use-cross == 'auto')
+      shell: bash
+      run: cross build --release --target ${{ inputs.target }}
+
+    - name: Build with zigbuild
+      if: inputs.use-zigbuild == 'true'
+      shell: bash
+      run: cargo zigbuild --release --target ${{ inputs.target }}
+
+    - name: Build with cargo (native)
+      if: (runner.os == 'macOS' || runner.os == 'Windows') && inputs.use-zigbuild == 'false'
+      shell: bash
+      run: cargo build --release --target ${{ inputs.target }}
+
+    - name: Set library path and verify
+      id: set-lib-path
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Determine library name based on target
+        case "${{ inputs.target }}" in
+          *-apple-darwin)
+            LIB_NAME="libtokenizers.dylib"
+            ;;
+          *-unknown-linux-gnu)
+            LIB_NAME="libtokenizers.so"
+            ;;
+          *-unknown-linux-musl)
+            LIB_NAME="libtokenizers.a"
+            ;;
+          *-pc-windows-msvc)
+            LIB_NAME="tokenizers.dll"
+            ;;
+          *)
+            echo "Unknown target: ${{ inputs.target }}"
+            exit 1
+            ;;
+        esac
+
+        LIB_PATH="target/${{ inputs.target }}/release/${LIB_NAME}"
+
+        echo "Expecting library at: $LIB_PATH"
+        if [ -f "$LIB_PATH" ]; then
+          echo "✓ Library found"
+          ls -lh "$LIB_PATH"
+          file "$LIB_PATH" || true
+          echo "path=$LIB_PATH" >> $GITHUB_OUTPUT
+        else
+          echo "✗ Library not found at: $LIB_PATH"
+          exit 1
+        fi
