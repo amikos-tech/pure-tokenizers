@@ -164,11 +164,12 @@ tokenizer, err := tokenizers.FromHuggingFace("meta-llama/Llama-2-7b-hf",
 
 // Configure HuggingFace options
 tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
-    tokenizers.WithHFToken(token),           // Authentication token
-    tokenizers.WithHFRevision("main"),       // Specific revision/branch
+    tokenizers.WithHFToken(token),              // Authentication token
+    tokenizers.WithHFRevision("main"),          // Specific revision/branch
     tokenizers.WithHFCacheDir("/custom/cache"), // Custom cache directory
     tokenizers.WithHFTimeout(30*time.Second),   // Download timeout
-    tokenizers.WithHFOfflineMode(true),      // Use cached version only
+    tokenizers.WithHFOfflineMode(true),         // Use cached version only
+    tokenizers.WithHFStreamingThreshold(10*1024*1024), // Stream downloads >10MB to disk
 )
 
 // The tokenizer is automatically cached for offline use
@@ -262,6 +263,8 @@ tokenizer, err := tokenizers.FromFile("tokenizer.json",
 | `TOKENIZERS_GITHUB_REPO` | GitHub repo for downloads | `amikos-tech/pure-tokenizers` |
 | `TOKENIZERS_VERSION` | Library version to download | `latest` |
 | `GITHUB_TOKEN` | GitHub API token (for rate limits) | None |
+| `HF_MAX_TOKENIZER_SIZE` | Max tokenizer file size (bytes) | 500MB |
+| `HF_STREAMING_THRESHOLD` | Size threshold for streaming to disk | 10MB |
 
 ### Library Loading Options
 

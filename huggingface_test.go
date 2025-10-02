@@ -1347,3 +1347,116 @@ func TestGetEnvDuration(t *testing.T) {
 		})
 	}
 }
+func TestStreamToTempFile(t *testing.T) {
+	testCases := []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{
+			name:    "SmallData",
+			data:    `{"version":"1.0","truncation":null}`,
+			wantErr: false,
+		},
+		{
+			name:    "LargeData",
+			data:    strings.Repeat(`{"key":"value"}`, 10000),
+			wantErr: false,
+		},
+		{
+			name:    "EmptyData",
+			data:    "",
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := strings.NewReader(tc.data)
+			
+			result, err := streamToTempFile(reader)
+			
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.data, string(result))
+			}
+		})
+	}
+}
+
+func TestStreamingThreshold(t *testing.T) {
+	// Skip in short mode as this downloads from network
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
+
+	t.Run("BelowThreshold", func(t *testing.T) {
+		// Small model should use in-memory download
+		tokenizer, err := FromHuggingFace("bert-base-uncased",
+			WithHFStreamingThreshold(100*1024*1024), // 100MB threshold
+		)
+		if err != nil {
+			t.Skipf("Skipping test, download failed: %v", err)
+		}
+		defer func() { _ = tokenizer.Close() }()
+		
+		assert.NotNil(t, tokenizer)
+	})
+
+	t.Run("DisableStreaming", func(t *testing.T) {
+		// Streaming disabled (-1)
+		tokenizer, err := FromHuggingFace("bert-base-uncased",
+			WithHFStreamingThreshold(-1), // Disable streaming
+		)
+		if err != nil {
+			t.Skipf("Skipping test, download failed: %v", err)
+		}
+		defer func() { _ = tokenizer.Close() }()
+		
+		assert.NotNil(t, tokenizer)
+	})
+
+	t.Run("LowThreshold", func(t *testing.T) {
+		// Force streaming with very low threshold
+		tokenizer, err := FromHuggingFace("bert-base-uncased",
+			WithHFStreamingThreshold(1), // 1 byte threshold forces streaming
+		)
+		if err != nil {
+			t.Skipf("Skipping test, download failed: %v", err)
+		}
+		defer func() { _ = tokenizer.Close() }()
+		
+		assert.NotNil(t, tokenizer)
+	})
+}
+
+func TestWithHFStreamingThreshold(t *testing.T) {
+	testCases := []struct {
+		name      string
+		threshold int64
+		wantErr   bool
+	}{
+		{"ValidZero", 0, false},
+		{"ValidPositive", 10 * 1024 * 1024, false},
+		{"ValidDisabled", -1, false},
+		{"InvalidNegative", -2, true},
+		{"InvalidLargeNegative", -100, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := &Tokenizer{}
+			opt := WithHFStreamingThreshold(tc.threshold)
+			err := opt(tok)
+			
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.threshold, tok.hfConfig.StreamingThreshold)
+			}
+		})
+	}
+}

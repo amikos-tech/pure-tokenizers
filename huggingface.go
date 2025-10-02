@@ -32,6 +32,10 @@ const (
 	// This prevents OOM errors from excessively large downloads
 	DefaultMaxTokenizerSize = 500 * 1024 * 1024
 
+	// DefaultStreamingThreshold is the size threshold (10MB) above which downloads are streamed to disk
+	// instead of being loaded entirely into memory. This prevents OOM errors for large tokenizers.
+	DefaultStreamingThreshold = 10 * 1024 * 1024
+
 	// HTTP connection pooling defaults
 	defaultMaxIdleConns        = 100
 	defaultMaxIdleConnsPerHost = 10
@@ -244,6 +248,13 @@ type HFConfig struct {
 	// Use WithHFMaxTokenizerSize to explicitly set this value.
 	MaxTokenizerSize int64
 
+	// StreamingThreshold is the size threshold above which downloads are streamed to disk
+	// instead of being loaded entirely into memory (env: HF_STREAMING_THRESHOLD, default: 10MB).
+	// When set to 0 (zero value), falls back to HF_STREAMING_THRESHOLD environment variable,
+	// or DefaultStreamingThreshold (10MB) if not set.
+	// Set to -1 to disable streaming (always use in-memory downloads).
+	StreamingThreshold int64
+
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
 	// Config fields take priority over environment variables.
@@ -440,6 +451,23 @@ func WithHFMaxTokenizerSize(maxSize int64) TokenizerOption {
 	}
 }
 
+// WithHFStreamingThreshold sets the size threshold for streaming downloads to disk.
+// Downloads larger than this threshold are streamed to a temporary file instead of
+// being loaded entirely into memory. Default is 10MB.
+// Set to -1 to disable streaming (always use in-memory downloads).
+func WithHFStreamingThreshold(threshold int64) TokenizerOption {
+	return func(t *Tokenizer) error {
+		if threshold < -1 {
+			return errors.New("streaming threshold must be -1 (disabled) or non-negative")
+		}
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		t.hfConfig.StreamingThreshold = threshold
+		return nil
+	}
+}
+
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
 func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, config.Revision)
@@ -574,10 +602,38 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 		}
 	}
 
-	// Read response body
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp, errors.Wrap(err, "failed to read response")
+	// Determine if we should stream to disk based on content length
+	streamingThreshold := config.StreamingThreshold
+	if streamingThreshold == 0 {
+		streamingThreshold = getEnvInt64("HF_STREAMING_THRESHOLD", DefaultStreamingThreshold)
+	}
+
+	// Check if we should use streaming (-1 disables streaming)
+	useStreaming := streamingThreshold >= 0 && resp.ContentLength > streamingThreshold
+
+	if os.Getenv("DEBUG") != "" && resp.ContentLength > 0 {
+		if useStreaming {
+			log.Printf("[DEBUG] Using streaming download for %d bytes (threshold: %d bytes)",
+				resp.ContentLength, streamingThreshold)
+		} else {
+			log.Printf("[DEBUG] Using in-memory download for %d bytes (threshold: %d bytes)",
+				resp.ContentLength, streamingThreshold)
+		}
+	}
+
+	var data []byte
+	if useStreaming {
+		// Stream to temporary file, then read back
+		data, err = streamToTempFile(resp.Body)
+		if err != nil {
+			return nil, resp, errors.Wrap(err, "failed to stream response to temp file")
+		}
+	} else {
+		// Load into memory (existing behavior for smaller files)
+		data, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, resp, errors.Wrap(err, "failed to read response")
+		}
 	}
 
 	// Validate it's valid JSON
@@ -587,6 +643,40 @@ func downloadWithRetryAndResponse(url string, config *HFConfig) ([]byte, *http.R
 	}
 
 	return data, resp, nil
+}
+
+// streamToTempFile streams the response body to a temporary file and returns the data.
+// This is more memory-efficient for large downloads.
+func streamToTempFile(body io.Reader) ([]byte, error) {
+	// Create a temporary file in the same directory as the final cache location
+	// to ensure atomic rename works (same filesystem)
+	tempFile, err := os.CreateTemp("", "tokenizer-download-*.json")
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create temp file")
+	}
+	defer func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name()) // Clean up temp file
+	}()
+
+	// Stream response body to temp file
+	_, err = io.Copy(tempFile, body)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to copy response to temp file")
+	}
+
+	// Seek back to beginning to read the file
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		return nil, errors.Wrap(err, "failed to seek temp file")
+	}
+
+	// Read the file contents
+	data, err := io.ReadAll(tempFile)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read temp file")
+	}
+
+	return data, nil
 }
 
 // validateModelID checks if the model ID is valid
