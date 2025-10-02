@@ -202,7 +202,40 @@ func inspectCache() {
 
 ### Selective Cache Clearing
 
-Clear cache for specific models or revisions:
+Clear cache for specific models, revisions, or patterns:
+
+#### Using Glob Patterns (Recommended)
+
+The library provides a safe, cross-platform API for pattern-based cache clearing:
+
+```go
+// Clear all BERT model variants
+cleared, err := tokenizers.ClearHFCachePattern("bert-*")
+if err != nil {
+    log.Fatalf("Failed to clear cache: %v", err)
+}
+fmt.Printf("Cleared %d cache entries\n", cleared)
+
+// Clear all models from a specific organization
+cleared, err = tokenizers.ClearHFCachePattern("huggingface/*")
+
+// Clear all organization-prefixed models
+cleared, err = tokenizers.ClearHFCachePattern("*/*")
+
+// Use wildcards and character matching
+cleared, err = tokenizers.ClearHFCachePattern("gpt2-*")  // gpt2-medium, gpt2-large, etc.
+cleared, err = tokenizers.ClearHFCachePattern("bert-?ase-*")  // bert-base-*, bert-case-*
+```
+
+**Supported Pattern Syntax:**
+- `*` - Matches any sequence of characters
+- `?` - Matches any single character
+- `[abc]` - Matches any character in the set
+- `[a-z]` - Matches any character in the range
+
+**Security:** Patterns are validated to prevent directory traversal attacks (`..`) and absolute paths.
+
+#### Manual Cleanup (Shell)
 
 ```bash
 # Clear all versions of a specific model
@@ -211,7 +244,7 @@ rm -rf ~/.cache/tokenizers/lib/hf/models/bert-base-uncased/
 # Clear only a specific revision
 rm -rf ~/.cache/tokenizers/lib/hf/models/bert-base-uncased/v1.0.0/
 
-# Clear models matching a pattern
+# Clear models matching a pattern (less safe, use API when possible)
 rm -rf ~/.cache/tokenizers/lib/hf/models/google--*
 ```
 

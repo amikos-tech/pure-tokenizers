@@ -764,6 +764,93 @@ func ClearHFCache() error {
 	return os.RemoveAll(modelsDir)
 }
 
+// ClearHFCachePattern clears cache entries matching a glob pattern.
+// The pattern is matched against model IDs (e.g., "bert-*", "huggingface/*").
+// Patterns use standard glob syntax: * matches any sequence, ? matches any single character.
+//
+// Examples:
+//   - "bert-*" matches all BERT model variants
+//   - "huggingface/*" matches all models from the huggingface organization
+//   - "*/bert-*" matches BERT models from any organization
+//
+// For security, patterns containing ".." in path segments or absolute paths are rejected.
+// Returns the number of cache entries cleared and any error encountered.
+func ClearHFCachePattern(pattern string) (int, error) {
+	// Security: prevent directory traversal attempts
+	// Check if pattern is an absolute path
+	if filepath.IsAbs(pattern) {
+		return 0, errors.New("invalid pattern: absolute paths not allowed")
+	}
+
+	// Check each path component for ".." to prevent directory traversal
+	// This prevents both "../etc" and valid-looking patterns like "bert-..base"
+	parts := strings.Split(pattern, "/")
+	for _, part := range parts {
+		if part == ".." {
+			return 0, errors.New("invalid pattern: directory traversal not allowed")
+		}
+	}
+
+	// Additional check: patterns containing ".." anywhere are suspicious
+	// This catches edge cases like "bert-base-..cased" which are unlikely to be legitimate
+	if strings.Contains(pattern, "..") {
+		return 0, errors.New("invalid pattern: patterns containing '..' are not allowed")
+	}
+
+	// Validate pattern syntax upfront for faster failure
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return 0, errors.Wrapf(err, "invalid glob pattern: %s", pattern)
+	}
+
+	cacheDir := getHFCacheDir()
+	modelsDir := filepath.Join(cacheDir, "models")
+
+	if _, err := os.Stat(modelsDir); os.IsNotExist(err) {
+		return 0, nil // Cache directory doesn't exist
+	}
+
+	entries, err := os.ReadDir(modelsDir)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to read cache directory")
+	}
+
+	cleared := 0
+	var errs []string
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Convert sanitized directory name back to model ID (-- → /)
+		modelID := strings.ReplaceAll(entry.Name(), "--", "/")
+
+		// Check if model ID matches the glob pattern
+		// Pattern already validated above, so err should never occur here
+		matched, _ := filepath.Match(pattern, modelID)
+
+		if matched {
+			modelCacheDir := filepath.Join(modelsDir, entry.Name())
+			if err := os.RemoveAll(modelCacheDir); err != nil {
+				errs = append(errs, fmt.Sprintf("failed to clear %s: %v", modelID, err))
+			} else {
+				cleared++
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		// Format error messages individually for better readability
+		errMsg := fmt.Sprintf("cleared %d entries with %d errors:\n", cleared, len(errs))
+		for i, e := range errs {
+			errMsg += fmt.Sprintf("  %d. %s\n", i+1, e)
+		}
+		return cleared, errors.New(strings.TrimSpace(errMsg))
+	}
+
+	return cleared, nil
+}
+
 // parseRetryAfter parses the Retry-After header value.
 // It can be either a delay in seconds or an HTTP date.
 // The returned duration is capped at HFMaxRetryAfterDelay to prevent excessive waits.

@@ -335,6 +335,184 @@ func TestCacheManagement(t *testing.T) {
 	})
 }
 
+func TestClearHFCachePattern(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Override cache directory via environment variable
+	oldHFHome := os.Getenv("HF_HOME")
+	defer func() {
+		if oldHFHome != "" {
+			_ = os.Setenv("HF_HOME", oldHFHome)
+		} else {
+			_ = os.Unsetenv("HF_HOME")
+		}
+	}()
+	require.NoError(t, os.Setenv("HF_HOME", tempDir))
+
+	// getHFCacheDir() will return tempDir/tokenizers
+	cacheDir := filepath.Join(tempDir, "tokenizers")
+	modelsDir := filepath.Join(cacheDir, "models")
+	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+
+	// Create mock cache entries for various models
+	testModels := []string{
+		"bert-base-uncased",
+		"bert-large-uncased",
+		"bert-base-cased",
+		"gpt2",
+		"gpt2-medium",
+		"huggingface/tokenizers",
+		"openai/gpt-4",
+		"anthropic/claude-v1",
+	}
+
+	for _, modelID := range testModels {
+		// Convert model ID to sanitized directory name
+		sanitized := strings.ReplaceAll(modelID, "/", "--")
+		modelDir := filepath.Join(modelsDir, sanitized)
+		require.NoError(t, os.MkdirAll(modelDir, 0755))
+		// Create a dummy file in each model dir
+		dummyFile := filepath.Join(modelDir, "tokenizer.json")
+		require.NoError(t, os.WriteFile(dummyFile, []byte("{}"), 0644))
+	}
+
+	t.Run("MatchAllBert", func(t *testing.T) {
+		// Clear all BERT models
+		cleared, err := ClearHFCachePattern("bert-*")
+		require.NoError(t, err)
+		assert.Equal(t, 3, cleared, "should clear 3 BERT models")
+
+		// Verify BERT models are gone
+		entries, err := os.ReadDir(modelsDir)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			modelID := strings.ReplaceAll(entry.Name(), "--", "/")
+			assert.NotContains(t, modelID, "bert-", "bert models should be cleared")
+		}
+	})
+
+	// Recreate BERT models for next test
+	for _, modelID := range []string{"bert-base-uncased", "bert-large-uncased", "bert-base-cased"} {
+		sanitized := strings.ReplaceAll(modelID, "/", "--")
+		modelDir := filepath.Join(modelsDir, sanitized)
+		require.NoError(t, os.MkdirAll(modelDir, 0755))
+		dummyFile := filepath.Join(modelDir, "tokenizer.json")
+		require.NoError(t, os.WriteFile(dummyFile, []byte("{}"), 0644))
+	}
+
+	t.Run("MatchOrganization", func(t *testing.T) {
+		// Clear all models from huggingface org
+		cleared, err := ClearHFCachePattern("huggingface/*")
+		require.NoError(t, err)
+		assert.Equal(t, 1, cleared, "should clear 1 huggingface model")
+
+		// Verify huggingface model is gone
+		_, err = os.Stat(filepath.Join(modelsDir, "huggingface--tokenizers"))
+		assert.True(t, os.IsNotExist(err), "huggingface/tokenizers should be cleared")
+	})
+
+	t.Run("MatchWithQuestionMark", func(t *testing.T) {
+		// ? matches single character, so gpt? matches gpt2 (4 chars total)
+		cleared, err := ClearHFCachePattern("gpt?")
+		require.NoError(t, err)
+		assert.Equal(t, 1, cleared, "gpt? should match gpt2 (single char)")
+
+		// gpt2-medium should still exist
+		_, err = os.Stat(filepath.Join(modelsDir, "gpt2-medium"))
+		assert.NoError(t, err, "gpt2-medium should still exist")
+
+		// Now clear with wildcard to match gpt2-medium
+		cleared, err = ClearHFCachePattern("gpt2-*")
+		require.NoError(t, err)
+		assert.Equal(t, 1, cleared, "should clear gpt2-medium")
+	})
+
+	t.Run("MatchMultipleOrgs", func(t *testing.T) {
+		// Match all models with org prefix
+		cleared, err := ClearHFCachePattern("*/*")
+		require.NoError(t, err)
+		assert.Equal(t, 2, cleared, "should clear openai/gpt-4 and anthropic/claude-v1")
+	})
+
+	t.Run("NoMatches", func(t *testing.T) {
+		// Pattern that matches nothing
+		cleared, err := ClearHFCachePattern("nonexistent-*")
+		require.NoError(t, err)
+		assert.Equal(t, 0, cleared, "should clear 0 models")
+	})
+
+	t.Run("EmptyCacheDirectory", func(t *testing.T) {
+		// Clear all remaining
+		_, err := ClearHFCachePattern("*")
+		require.NoError(t, err)
+
+		// Try to clear from empty cache
+		cleared, err := ClearHFCachePattern("*")
+		require.NoError(t, err)
+		assert.Equal(t, 0, cleared, "should clear 0 from empty cache")
+	})
+
+	t.Run("SecurityDotDot", func(t *testing.T) {
+		// Attempt directory traversal
+		cleared, err := ClearHFCachePattern("../etc/*")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "directory traversal")
+		assert.Equal(t, 0, cleared)
+	})
+
+	t.Run("SecurityDotDotInPattern", func(t *testing.T) {
+		// Attempt to bypass security with dots embedded in pattern
+		// This could look like a valid model name but contains ".."
+		cleared, err := ClearHFCachePattern("bert-base-..cased")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "'..'")
+		assert.Equal(t, 0, cleared)
+
+		// Also test with slashes
+		cleared, err = ClearHFCachePattern("org/../model")
+		assert.Error(t, err)
+		assert.Equal(t, 0, cleared)
+	})
+
+	t.Run("SecurityAbsolutePath", func(t *testing.T) {
+		// Attempt absolute path (platform-specific)
+		var absPath string
+		if filepath.Separator == '\\' {
+			// Windows
+			absPath = "C:\\Windows\\System32"
+		} else {
+			// Unix-like
+			absPath = "/etc/passwd"
+		}
+		cleared, err := ClearHFCachePattern(absPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "absolute paths not allowed")
+		assert.Equal(t, 0, cleared)
+	})
+
+	t.Run("InvalidGlobPattern", func(t *testing.T) {
+		// Recreate a model for this test
+		modelDir := filepath.Join(modelsDir, "test-model")
+		require.NoError(t, os.MkdirAll(modelDir, 0755))
+
+		// Invalid glob syntax (unclosed bracket)
+		cleared, err := ClearHFCachePattern("[invalid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid glob pattern")
+		assert.Equal(t, 0, cleared)
+	})
+
+	t.Run("NonExistentCacheDir", func(t *testing.T) {
+		// Point to non-existent cache
+		require.NoError(t, os.Setenv("HF_HOME", filepath.Join(tempDir, "nonexistent")))
+		defer func() { _ = os.Setenv("HF_HOME", tempDir) }()
+
+		cleared, err := ClearHFCachePattern("*")
+		require.NoError(t, err, "should not error on non-existent cache")
+		assert.Equal(t, 0, cleared)
+	})
+}
+
 func TestDownloadWithRetry(t *testing.T) {
 	attemptCount := 0
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
