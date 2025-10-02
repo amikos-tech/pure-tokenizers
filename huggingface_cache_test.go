@@ -104,6 +104,21 @@ func TestIsExpectedConcurrentCacheError(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "Windows file locking error (lowercase)",
+			err:      errors.New("the process cannot access the file because it is being used by another process."),
+			expected: true,
+		},
+		{
+			name:     "Windows file locking error (uppercase)",
+			err:      errors.New("THE PROCESS CANNOT ACCESS THE FILE BECAUSE IT IS BEING USED BY ANOTHER PROCESS."),
+			expected: true,
+		},
+		{
+			name:     "Windows file locking error (mixed case)",
+			err:      errors.New("The Process Cannot Access The File Because It Is Being Used By Another Process."),
+			expected: true,
+		},
+		{
 			name:     "unrelated error",
 			err:      errors.New("permission denied"),
 			expected: false,
@@ -117,6 +132,9 @@ func TestIsExpectedConcurrentCacheError(t *testing.T) {
 			name:     "partial Windows message should not match",
 			err:      errors.New("being used by another process"),
 			expected: false,
+			// This test ensures we don't match on partial strings that could appear
+			// in unrelated errors. The full Windows error always includes the complete
+			// phrase "process cannot access the file because it is being used by another process"
 		},
 	}
 
@@ -153,22 +171,24 @@ func isExpectedConcurrentCacheError(err error) bool {
 	}
 
 	errMsg := err.Error()
+	errMsgLower := strings.ToLower(errMsg)
 
 	// File not found (including wrapped errors and OS-specific messages)
 	if errors.Is(err, os.ErrNotExist) ||
 		errors.Is(err, ErrCacheNotFound) ||
-		strings.Contains(errMsg, "cannot find the file") ||
-		strings.Contains(errMsg, "no such file") {
+		strings.Contains(errMsgLower, "cannot find the file") ||
+		strings.Contains(errMsgLower, "no such file") {
 		return true
 	}
 
 	// Partial reads during concurrent access
-	if strings.Contains(errMsg, "unexpected end of JSON") || errors.Is(err, io.ErrUnexpectedEOF) {
+	if strings.Contains(errMsgLower, "unexpected end of json") || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 
 	// Windows-specific file locking during concurrent access (ERROR_SHARING_VIOLATION)
-	if strings.Contains(errMsg, "process cannot access the file because it is being used by another process") {
+	// Note: Using case-insensitive matching as Windows error messages may vary in casing
+	if strings.Contains(errMsgLower, "process cannot access the file because it is being used by another process") {
 		return true
 	}
 
