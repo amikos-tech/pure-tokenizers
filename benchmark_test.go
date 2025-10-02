@@ -205,14 +205,29 @@ func BenchmarkFromHuggingFace(b *testing.B) {
 	}
 	_ = tokenizer.Close()
 
-	b.ResetTimer()
-	for b.Loop() {
-		tokenizer, err := FromHuggingFace(modelID)
-		if err != nil {
-			b.Fatalf("Failed to load tokenizer: %v", err)
+	b.Run("CreationOnly", func(b *testing.B) {
+		b.ResetTimer()
+		for b.Loop() {
+			tokenizer, err := FromHuggingFace(modelID)
+			if err != nil {
+				b.Fatalf("Failed to load tokenizer: %v", err)
+			}
+			b.StopTimer()
+			_ = tokenizer.Close()
+			b.StartTimer()
 		}
-		_ = tokenizer.Close()
-	}
+	})
+
+	b.Run("FullLifecycle", func(b *testing.B) {
+		b.ResetTimer()
+		for b.Loop() {
+			tokenizer, err := FromHuggingFace(modelID)
+			if err != nil {
+				b.Fatalf("Failed to load tokenizer: %v", err)
+			}
+			_ = tokenizer.Close()
+		}
+	})
 }
 
 func BenchmarkVocabSize(b *testing.B) {
