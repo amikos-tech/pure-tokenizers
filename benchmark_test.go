@@ -186,6 +186,8 @@ func BenchmarkFromFile(b *testing.B) {
 }
 
 func BenchmarkFromHuggingFace(b *testing.B) {
+	b.ReportAllocs()
+
 	originalCache := os.Getenv("HF_HUB_CACHE")
 	tmpDir := b.TempDir()
 	_ = os.Setenv("HF_HUB_CACHE", tmpDir)
@@ -206,7 +208,6 @@ func BenchmarkFromHuggingFace(b *testing.B) {
 	_ = tokenizer.Close()
 
 	b.Run("CreationOnly", func(b *testing.B) {
-		b.ResetTimer()
 		for b.Loop() {
 			tokenizer, err := FromHuggingFace(modelID)
 			if err != nil {
@@ -219,7 +220,6 @@ func BenchmarkFromHuggingFace(b *testing.B) {
 	})
 
 	b.Run("FullLifecycle", func(b *testing.B) {
-		b.ResetTimer()
 		for b.Loop() {
 			tokenizer, err := FromHuggingFace(modelID)
 			if err != nil {
