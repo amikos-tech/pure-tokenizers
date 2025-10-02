@@ -1,16 +1,38 @@
 name: Build Rust Library
 description: Build Rust library for specified target
 
+# Usage examples:
+#   - Linux with cross (auto-detected):
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#
+#   - Linux with native cargo (skip cross):
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#       use-cross: 'false'
+#
+#   - Any platform with zigbuild:
+#     uses: ./.github/actions/build-rust-library
+#     with:
+#       target: x86_64-unknown-linux-gnu
+#       use-zigbuild: 'true'
+
 inputs:
   target:
     description: 'Rust target triple (e.g., x86_64-unknown-linux-gnu)'
     required: true
   use-cross:
-    description: 'Use cross for building (default: auto-detect for Linux)'
+    description: |
+      Use cross for building. Options:
+        - 'auto' (default): Auto-detect - uses cross on Linux, native cargo elsewhere
+        - 'true': Force use of cross
+        - 'false': Force use of native cargo (skips cross even on Linux)
     required: false
     default: 'auto'
   use-zigbuild:
-    description: 'Use cargo-zigbuild for building'
+    description: 'Use cargo-zigbuild for building (overrides use-cross)'
     required: false
     default: 'false'
 
@@ -43,7 +65,13 @@ runs:
       run: cargo zigbuild --release --target ${{ inputs.target }}
 
     - name: Build with cargo (native)
-      if: (runner.os == 'macOS' || runner.os == 'Windows') && inputs.use-zigbuild != 'true' && (inputs.use-cross != 'true' && inputs.use-cross != 'auto')
+      # Fallback: macOS, Windows, or Linux when not using cross/zigbuild
+      # Note: Uses bash shell even on Windows (via Git Bash) for consistency
+      # with other build steps and cross-platform script compatibility
+      if: |
+        (runner.os == 'macOS' || runner.os == 'Windows' || runner.os == 'Linux') &&
+        inputs.use-zigbuild != 'true' &&
+        (inputs.use-cross != 'true' && inputs.use-cross != 'auto')
       shell: bash
       run: cargo build --release --target ${{ inputs.target }}
 
