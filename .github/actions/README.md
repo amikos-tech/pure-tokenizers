@@ -100,7 +100,13 @@ The composite actions follow a layered approach:
 **Build Selection Logic**:
 1. If `use-zigbuild='true'` → uses cargo-zigbuild
 2. Else if Linux + `use-cross='true'|'auto'` → uses cross
-3. Else → uses native cargo
+3. Else if `use-cross='false'` → uses native cargo
+4. Note: Default is `'auto'` which uses cross on Linux, native elsewhere
+
+**Library Output**:
+- All platforms produce shared libraries (.so/.dylib/.dll)
+- musl targets produce `.so` (cdylib), not `.a` static libraries
+- Cargo.toml specifies `crate-type = ["cdylib", "staticlib"]`
 
 ---
 

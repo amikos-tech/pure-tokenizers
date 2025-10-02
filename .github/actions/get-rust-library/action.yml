@@ -151,7 +151,7 @@ runs:
                   Write-Host "Checksum verification failed, building locally instead"
                   cargo build --release
                   "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
-                  return
+                  exit 0
                 }
               } else {
                 Write-Host "Warning: No checksum file found, skipping verification"

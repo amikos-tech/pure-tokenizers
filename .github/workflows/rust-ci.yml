@@ -97,4 +97,4 @@ jobs:
       uses: ./.github/actions/build-rust-library
       with:
         target: ${{ matrix.target }}
-        use-cross: ${{ matrix.os == 'ubuntu-latest' && 'true' || 'false' }}
+        # use-cross defaults to 'auto' which automatically uses cross on Linux
