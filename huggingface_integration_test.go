@@ -410,7 +410,3 @@ func isRateLimitError(err error) bool {
 	}
 	return containsSubstring(err.Error(), "rate limit")
 }
-
-func containsSubstring(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
