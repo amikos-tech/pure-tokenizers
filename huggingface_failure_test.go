@@ -1102,21 +1102,23 @@ func TestContextCancellation(t *testing.T) {
 		}
 
 		// Run download in goroutine - it will fail after retries
-		done := make(chan struct{})
+		type result struct {
+			err error
+		}
+		resultChan := make(chan result, 1)
 
 		go func() {
-			defer close(done)
 			_, err := downloadTokenizerFromHF("test-model", config)
-			// We expect this to fail after exhausting retries
-			if err == nil {
-				t.Error("Expected download to fail but it succeeded")
-			}
+			resultChan <- result{err: err}
 		}()
 
 		// Wait for completion with timeout
 		select {
-		case <-done:
-			// Test completed successfully
+		case res := <-resultChan:
+			// We expect this to fail after exhausting retries
+			if res.err == nil {
+				t.Error("Expected download to fail but it succeeded")
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("Download did not complete within expected time")
 		}
