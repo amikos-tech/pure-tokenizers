@@ -1051,13 +1051,12 @@ func TestDialerFailures(t *testing.T) {
 
 // TestContextCancellation tests explicit context cancellation
 func TestContextCancellation(t *testing.T) {
-	server := NewFailureInjectionServer(t)
-
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
+	// Each subtest creates its own server to avoid race conditions
+	// when modifying server state concurrently
 
 	t.Run("Cancel during download", func(t *testing.T) {
+		server := NewFailureInjectionServer(t)
+
 		server.ResetCounters()
 		server.SetFailureMode(FailureModeNone)
 		server.SetResponseDelay(2 * time.Second)
@@ -1072,6 +1071,7 @@ func TestContextCancellation(t *testing.T) {
 			cancel()
 		}()
 
+		// Test HTTP client cancellation directly (no global variable needed)
 		req, err := http.NewRequestWithContext(ctx, "GET", server.URL+"/test-model/resolve/main/tokenizer.json", nil)
 		require.NoError(t, err)
 
@@ -1084,49 +1084,44 @@ func TestContextCancellation(t *testing.T) {
 	})
 
 	t.Run("Cancel during retry", func(t *testing.T) {
+		server := NewFailureInjectionServer(t)
+
 		server.ResetCounters()
 		server.SetFailureMode(FailureModeServerError)
 		server.SetStatusCode(http.StatusInternalServerError)
-		server.SetFailureCount(10) // Force many retries
+		server.SetFailureCount(3) // Reduced retry count for faster test
 
 		tempDir := t.TempDir()
 
 		config := &HFConfig{
+			BaseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    longTestTimeout,
-			MaxRetries: 10, // Allow many retries
+			Timeout:    shortTestTimeout,
+			MaxRetries: 3, // Reduced retries for faster test
 		}
 
-		// Run download in goroutine and cancel after first failure
-		errChan := make(chan error, 1)
-		ctx, cancel := context.WithCancel(context.Background())
-
-		go func() {
-			// Wait for first request to complete
-			time.Sleep(200 * time.Millisecond)
-			cancel()
-		}()
+		// Run download in goroutine - it will fail after retries
+		type result struct {
+			err error
+		}
+		resultChan := make(chan result, 1)
 
 		go func() {
 			_, err := downloadTokenizerFromHF("test-model", config)
-			errChan <- err
+			resultChan <- result{err: err}
 		}()
 
-		// Even though context is canceled, downloadTokenizerFromHF doesn't use it directly
-		// This documents current behavior - context cancellation during retries
+		// Wait for completion with timeout
 		select {
-		case err := <-errChan:
-			// May get an error from failed retries
-			if err != nil {
-				t.Logf("Download interrupted with error: %v", err)
+		case res := <-resultChan:
+			// We expect this to fail after exhausting retries
+			if res.err == nil {
+				t.Error("Expected download to fail but it succeeded")
 			}
 		case <-time.After(5 * time.Second):
-			// Download may complete or timeout
-			t.Log("Download exceeded timeout period")
+			t.Error("Download did not complete within expected time")
 		}
-
-		_ = ctx // Use context to avoid unused variable warning
 	})
 }
 

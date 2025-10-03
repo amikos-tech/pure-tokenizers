@@ -243,6 +243,9 @@ type HFConfig struct {
 	// or DefaultMaxTokenizerSize (500MB) if the environment variable is not set.
 	// Use WithHFMaxTokenizerSize to explicitly set this value.
 	MaxTokenizerSize int64
+	// BaseURL is the base URL for HuggingFace Hub API (defaults to HFHubBaseURL if empty)
+	// This is primarily used for testing with mock servers
+	BaseURL string
 
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
@@ -442,7 +445,11 @@ func WithHFMaxTokenizerSize(maxSize int64) TokenizerOption {
 
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
 func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
-	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, config.Revision)
+	baseURL := config.BaseURL
+	if baseURL == "" {
+		baseURL = HFHubBaseURL
+	}
+	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", baseURL, modelID, config.Revision)
 
 	var lastErr error
 	var retryAfterDuration time.Duration

@@ -19,7 +19,9 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         set +e  # Temporarily disable exit on error
-        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        # Extract rust-v* tag from release list (handles new format with release titles)
+        # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep "rust-v" | head -1 | grep -o 'rust-v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         set -e  # Re-enable exit on error
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
@@ -71,7 +73,9 @@ runs:
         elif [ "$ARCH" = "x86_64" ]; then
           ARCH="x86_64"
         fi
-        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep -E "^rust-v" | head -1 | cut -f1)
+        # Extract rust-v* tag from release list (handles new format with release titles)
+        # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
+        LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep "rust-v" | head -1 | grep -o 'rust-v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         set -e  # Re-enable exit on error
         if [ -z "$LATEST_RELEASE" ]; then
           echo "No Rust release found, building locally"
@@ -117,10 +121,17 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         $ErrorActionPreference = "Continue"
-        $latestRelease = gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | Select-String -Pattern "^rust-v" | Select-Object -First 1
+        # Extract rust-v* tag from release list (handles new format with release titles)
+        # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
+        $releaseOutput = gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | Select-String -Pattern "rust-v\d+\.\d+\.\d+" | Select-Object -First 1
         $ErrorActionPreference = "Stop"
-        if ($latestRelease) {
-          $releaseTag = ($latestRelease -split "`t")[0]
+        if ($releaseOutput) {
+          # Extract the rust-v* tag using regex with strict semver pattern
+          if ($releaseOutput -match 'rust-v\d+\.\d+\.\d+') {
+            $releaseTag = $matches[0]
+          } else {
+            $releaseTag = $null
+          }
 
           # Validate that split succeeded
           if (-not $releaseTag) {
