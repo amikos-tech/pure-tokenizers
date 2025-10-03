@@ -1087,66 +1087,42 @@ func TestContextCancellation(t *testing.T) {
 	})
 
 	t.Run("Cancel during retry", func(t *testing.T) {
-		t.Skip("Skipping due to race condition with global HFHubBaseURL variable")
 		server := NewFailureInjectionServer(t)
-
-		originalURL := HFHubBaseURL
-		HFHubBaseURL = server.URL
-		defer func() { HFHubBaseURL = originalURL }()
 
 		server.ResetCounters()
 		server.SetFailureMode(FailureModeServerError)
 		server.SetStatusCode(http.StatusInternalServerError)
-		server.SetFailureCount(10) // Force many retries
+		server.SetFailureCount(3) // Reduced retry count for faster test
 
 		tempDir := t.TempDir()
 
 		config := &HFConfig{
+			BaseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
-			Timeout:    longTestTimeout,
-			MaxRetries: 10, // Allow many retries
+			Timeout:    shortTestTimeout,
+			MaxRetries: 3, // Reduced retries for faster test
 		}
 
-		// Run download in goroutine and cancel after first failure
-		errChan := make(chan error, 1)
+		// Run download in goroutine - it will fail after retries
 		done := make(chan struct{})
-		ctx, cancel := context.WithCancel(context.Background())
-
-		go func() {
-			// Wait for first request to complete
-			time.Sleep(200 * time.Millisecond)
-			cancel()
-		}()
 
 		go func() {
 			defer close(done)
 			_, err := downloadTokenizerFromHF("test-model", config)
-			errChan <- err
+			// We expect this to fail after exhausting retries
+			if err == nil {
+				t.Error("Expected download to fail but it succeeded")
+			}
 		}()
 
-		// Even though context is canceled, downloadTokenizerFromHF doesn't use it directly
-		// This documents current behavior - context cancellation during retries
+		// Wait for completion with timeout
 		select {
-		case err := <-errChan:
-			// May get an error from failed retries
-			if err != nil {
-				t.Logf("Download interrupted with error: %v", err)
-			}
-			// Wait for goroutine to finish before test cleanup
-			<-done
+		case <-done:
+			// Test completed successfully
 		case <-time.After(5 * time.Second):
-			// Download may complete or timeout
-			t.Log("Download exceeded timeout period")
-			// Still wait for completion with a short timeout
-			select {
-			case <-done:
-				// Goroutine finished
-			case <-time.After(1 * time.Second):
-				// Give up waiting
-			}
+			t.Error("Download did not complete within expected time")
 		}
-		_ = ctx // Use context to avoid unused variable warning
 	})
 }
 
