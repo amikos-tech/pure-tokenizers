@@ -1057,10 +1057,6 @@ func TestContextCancellation(t *testing.T) {
 	t.Run("Cancel during download", func(t *testing.T) {
 		server := NewFailureInjectionServer(t)
 
-		originalURL := HFHubBaseURL
-		HFHubBaseURL = server.URL
-		defer func() { HFHubBaseURL = originalURL }()
-
 		server.ResetCounters()
 		server.SetFailureMode(FailureModeNone)
 		server.SetResponseDelay(2 * time.Second)
@@ -1075,6 +1071,7 @@ func TestContextCancellation(t *testing.T) {
 			cancel()
 		}()
 
+		// Test HTTP client cancellation directly (no global variable needed)
 		req, err := http.NewRequestWithContext(ctx, "GET", server.URL+"/test-model/resolve/main/tokenizer.json", nil)
 		require.NoError(t, err)
 
