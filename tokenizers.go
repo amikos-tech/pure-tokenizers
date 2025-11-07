@@ -23,8 +23,8 @@ const (
 	ErrPaddingFailed           = -10
 	ErrDecodeFailed            = -11
 	ErrCStringConversionFailed = -12
-	ErrInvalidIDs     = -13
-	ErrInvalidOptions = -14
+	ErrInvalidIDs              = -13
+	ErrInvalidOptions          = -14
 )
 
 // AbiCompatibilityConstraint defines the required version range for ABI compatibility.
@@ -223,6 +223,7 @@ type Tokenizer struct {
 	fromFile            func(config string, result *TokenizerResult) int32
 	fromBytes           func(config []byte, bytesLen uint32, opts *TokenizerOptions, result *TokenizerResult) int32
 	encode              func(ptr unsafe.Pointer, message string, options *EncodeOptions, buffer *Buffer) int32
+	encodeBatchPairs    func(ptr unsafe.Pointer, sequences **byte, pairs **byte, count uintptr, options *EncodeOptions, buffer *Buffer) int32
 	freeTokenizer       func(ptr unsafe.Pointer)
 	freeBuffer          func(buffer *Buffer)
 	freeString          func(ptr unsafe.Pointer)
@@ -282,6 +283,7 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 	purego.RegisterLibFunc(&tokenizer.fromFile, tokenizer.libh, "from_file")
 	purego.RegisterLibFunc(&tokenizer.fromBytes, tokenizer.libh, "from_bytes")
 	purego.RegisterLibFunc(&tokenizer.encode, tokenizer.libh, "encode")
+	purego.RegisterLibFunc(&tokenizer.encodeBatchPairs, tokenizer.libh, "encode_batch_pairs")
 	purego.RegisterLibFunc(&tokenizer.freeBuffer, tokenizer.libh, "free_buffer")
 	purego.RegisterLibFunc(&tokenizer.freeTokenizer, tokenizer.libh, "free_tokenizer")
 	purego.RegisterLibFunc(&tokenizer.freeString, tokenizer.libh, "free_string")
@@ -418,6 +420,106 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	}
 
 	return result, nil
+}
+
+// EncodePairs encodes multiple sequence pairs in parallel.
+// This is useful for reranking tasks where you need to encode query-document pairs.
+func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...EncodeOption) ([]*EncodeResult, error) {
+	if t.encodeBatchPairs == nil || t.tokenizerh == nil {
+		return nil, errors.New("encode_batch_pairs function is not initialized or tokenizer is not loaded")
+	}
+
+	if len(sequences) != len(pairs) {
+		return nil, errors.Errorf("sequences and pairs must have the same length, got %d and %d", len(sequences), len(pairs))
+	}
+
+	if len(sequences) == 0 {
+		return []*EncodeResult{}, nil
+	}
+
+	options := t.defaultEncodingOpts
+	for _, opt := range opts {
+		if err := opt(&options); err != nil {
+			return nil, errors.Wrap(err, "failed to apply encoding option")
+		}
+	}
+
+	// Convert Go strings to C strings
+	cSequences := make([]*byte, len(sequences))
+	cPairs := make([]*byte, len(pairs))
+
+	for i := 0; i < len(sequences); i++ {
+		cSequences[i] = unsafe.StringData(sequences[i])
+		cPairs[i] = unsafe.StringData(pairs[i])
+	}
+
+	// Allocate output buffers
+	buffers := make([]Buffer, len(sequences))
+
+	rc := t.encodeBatchPairs(
+		t.tokenizerh,
+		(**byte)(unsafe.Pointer(&cSequences[0])),
+		(**byte)(unsafe.Pointer(&cPairs[0])),
+		uintptr(len(sequences)),
+		&options,
+		&buffers[0],
+	)
+
+	if rc < 0 {
+		lastError := getErrorForCode(rc)
+		return nil, errors.Wrap(lastError, "failed to encode pairs")
+	}
+
+	// Convert buffers to results
+	results := make([]*EncodeResult, len(buffers))
+	for i := range buffers {
+		buff := &buffers[i]
+		result := &EncodeResult{}
+
+		if buff.IDs != nil {
+			result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...)
+		}
+		if buff.TypeIDs != nil {
+			result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...)
+		}
+
+		specialTokensMask, attentionMask := MasksFromBuf(*buff)
+		if specialTokensMask != nil {
+			result.SpecialTokensMask = make([]uint32, 0, len(specialTokensMask))
+			result.SpecialTokensMask = append(result.SpecialTokensMask, specialTokensMask...)
+		}
+		if attentionMask != nil {
+			result.AttentionMask = make([]uint32, 0, len(attentionMask))
+			result.AttentionMask = append(result.AttentionMask, attentionMask...)
+		}
+
+		result.Tokens = TokensFromBuf(*buff)
+
+		if buff.Offsets != nil {
+			offsets := unsafe.Slice((*[2]uint)(unsafe.Pointer(buff.Offsets)), buff.Len)
+			result.Offsets = make([]uint32, 0, len(offsets)*2)
+			for _, offset := range offsets {
+				result.Offsets = append(result.Offsets, uint32(offset[0]), uint32(offset[1]))
+			}
+		}
+
+		results[i] = result
+
+		// Free the buffer
+		t.freeBuffer(buff)
+	}
+
+	return results, nil
+}
+
+// EncodePair encodes a single sequence pair.
+// This is a convenience wrapper around EncodePairs for encoding a single pair.
+func (t *Tokenizer) EncodePair(sequence string, pair string, opts ...EncodeOption) (*EncodeResult, error) {
+	results, err := t.EncodePairs([]string{sequence}, []string{pair}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return results[0], nil
 }
 
 func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error) {

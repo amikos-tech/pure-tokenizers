@@ -417,6 +417,111 @@ func TestErrors(t *testing.T) {
 	require.Error(t, err, "Expected error for unsupported tokenizer type")
 }
 
+func TestEncodePair(t *testing.T) {
+	libpath := checkLibraryExists(t)
+	tok, err := FromFile("./tokenizer.json", WithLibraryPath(libpath))
+	require.NoError(t, err, "Failed to load tokenizer from file")
+	t.Cleanup(func() {
+		_ = tok.Close()
+	})
+
+	t.Run("Single pair encoding", func(t *testing.T) {
+		res, err := tok.EncodePair("Hello, world!", "How are you?", WithReturnAllAttributes())
+		require.NoError(t, err, "Failed to encode pair")
+		require.NotNil(t, res)
+		require.Greater(t, len(res.IDs), 0)
+		require.Contains(t, res.Tokens, "hello")
+		require.Contains(t, res.Tokens, "how")
+		// BERT adds [SEP] between sequences
+		require.Contains(t, res.Tokens, "[SEP]")
+	})
+
+	t.Run("Empty pair", func(t *testing.T) {
+		res, err := tok.EncodePair("Hello", "", WithReturnTokens())
+		require.NoError(t, err, "Failed to encode pair with empty second sequence")
+		require.NotNil(t, res)
+		require.Greater(t, len(res.IDs), 0)
+	})
+}
+
+func TestEncodePairs(t *testing.T) {
+	libpath := checkLibraryExists(t)
+	tok, err := FromFile("./tokenizer.json", WithLibraryPath(libpath))
+	require.NoError(t, err, "Failed to load tokenizer from file")
+	t.Cleanup(func() {
+		_ = tok.Close()
+	})
+
+	t.Run("Multiple pairs encoding", func(t *testing.T) {
+		sequences := []string{
+			"What is the capital of France?",
+			"Who wrote Romeo and Juliet?",
+			"What is 2+2?",
+		}
+		pairs := []string{
+			"Paris is the capital of France.",
+			"William Shakespeare wrote Romeo and Juliet.",
+			"The answer is 4.",
+		}
+
+		results, err := tok.EncodePairs(sequences, pairs, WithReturnAllAttributes())
+		require.NoError(t, err, "Failed to encode pairs")
+		require.Len(t, results, 3)
+
+		for i, res := range results {
+			require.Greater(t, len(res.IDs), 0, "Result %d should have IDs", i)
+			require.Greater(t, len(res.Tokens), 0, "Result %d should have tokens", i)
+			require.Contains(t, res.Tokens, "[SEP]", "Result %d should contain separator token", i)
+		}
+	})
+
+	t.Run("Single pair batch", func(t *testing.T) {
+		results, err := tok.EncodePairs(
+			[]string{"Hello"},
+			[]string{"World"},
+			WithReturnTokens(),
+		)
+		require.NoError(t, err, "Failed to encode single pair batch")
+		require.Len(t, results, 1)
+		require.Greater(t, len(results[0].IDs), 0)
+	})
+
+	t.Run("Empty batch", func(t *testing.T) {
+		results, err := tok.EncodePairs([]string{}, []string{}, WithReturnTokens())
+		require.NoError(t, err, "Failed to encode empty batch")
+		require.Len(t, results, 0)
+	})
+
+	t.Run("Mismatched lengths", func(t *testing.T) {
+		_, err := tok.EncodePairs(
+			[]string{"Hello", "World"},
+			[]string{"Foo"},
+			WithReturnTokens(),
+		)
+		require.Error(t, err, "Should fail with mismatched lengths")
+		require.Contains(t, err.Error(), "same length")
+	})
+
+	t.Run("Batch with options", func(t *testing.T) {
+		sequences := []string{"Query 1", "Query 2"}
+		pairs := []string{"Document 1", "Document 2"}
+
+		results, err := tok.EncodePairs(sequences, pairs,
+			WithReturnTypeIDs(),
+			WithReturnAttentionMask(),
+			WithReturnOffsets(),
+		)
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+
+		for i, res := range results {
+			require.Greater(t, len(res.TypeIDs), 0, "Result %d should have type IDs", i)
+			require.Greater(t, len(res.AttentionMask), 0, "Result %d should have attention mask", i)
+			require.Greater(t, len(res.Offsets), 0, "Result %d should have offsets", i)
+		}
+	})
+}
+
 func TestAbi(t *testing.T) {
 	t.Run("Compatible ABI", func(t *testing.T) {
 		constraint, err := semver.NewConstraint("v0.1.x")
