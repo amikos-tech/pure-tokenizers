@@ -406,8 +406,12 @@ pub unsafe extern "C" fn encode_batch_pairs(
         Err(_) => return ERROR_ENCODING_FAILED,
     };
 
-    // Fill output buffers
-    for (i, encoding) in encodings.iter().enumerate() {
+    // Two-phase allocation to prevent memory leaks on error:
+    // Phase 1: Allocate all buffers into temp storage with proper error handling
+    // Phase 2: Only write to output if ALL allocations succeed
+    let mut temp_buffers: Vec<Buffer> = Vec::with_capacity(encodings.len());
+
+    for encoding in encodings.iter() {
         // Prepare IDs (always needed)
         let mut vec_ids = encoding.get_ids().to_vec();
         vec_ids.shrink_to_fit();
@@ -432,9 +436,13 @@ pub unsafe extern "C" fn encode_batch_pairs(
                 match std::ffi::CString::new(token.as_str()) {
                     Ok(cstr) => vec_tokens.push(cstr.into_raw()),
                     Err(_) => {
-                        // Clean up already allocated tokens
+                        // Clean up current iteration's tokens
                         for allocated_token in vec_tokens {
                             drop(std::ffi::CString::from_raw(allocated_token));
+                        }
+                        // Clean up all previously allocated buffers in temp_buffers
+                        for buffer in temp_buffers {
+                            free_buffer_contents(buffer);
                         }
                         return ERROR_CSTRING_CONVERSION_FAILED;
                     }
@@ -477,18 +485,21 @@ pub unsafe extern "C" fn encode_batch_pairs(
             std::mem::forget(vec_offsets);
         }
 
-        ptr::write(
-            out.add(i),
-            Buffer {
-                ids,
-                type_ids,
-                special_tokens_mask,
-                attention_mask,
-                tokens,
-                offsets,
-                len,
-            },
-        );
+        // Store buffer in temp storage instead of writing directly to output
+        temp_buffers.push(Buffer {
+            ids,
+            type_ids,
+            special_tokens_mask,
+            attention_mask,
+            tokens,
+            offsets,
+            len,
+        });
+    }
+
+    // Phase 2: All allocations succeeded, now write to output
+    for (i, buffer) in temp_buffers.into_iter().enumerate() {
+        ptr::write(out.add(i), buffer);
     }
 
     SUCCESS
@@ -559,6 +570,42 @@ pub unsafe extern "C" fn vocab_size(ptr: *mut Tokenizer, out: *mut i32) -> i32 {
     let size = tokenizer.get_vocab_size(true) as i32;
     ptr::write(out, size);
     SUCCESS
+}
+
+/// Internal helper to free buffer contents without dereferencing through pointer.
+/// Used for cleanup in error paths of encode_batch_pairs.
+unsafe fn free_buffer_contents(buf: Buffer) {
+    // Free the memory allocated for the fields in the Buffer struct
+    if !buf.ids.is_null() {
+        drop(Vec::from_raw_parts(buf.ids, buf.len, buf.len));
+    }
+
+    if !buf.type_ids.is_null() {
+        drop(Vec::from_raw_parts(buf.type_ids, buf.len, buf.len));
+    }
+
+    if !buf.special_tokens_mask.is_null() {
+        drop(Vec::from_raw_parts(
+            buf.special_tokens_mask,
+            buf.len,
+            buf.len,
+        ));
+    }
+
+    if !buf.attention_mask.is_null() {
+        drop(Vec::from_raw_parts(buf.attention_mask, buf.len, buf.len));
+    }
+
+    if !buf.offsets.is_null() {
+        drop(Vec::from_raw_parts(buf.offsets, buf.len * 2, buf.len * 2));
+    }
+
+    if !buf.tokens.is_null() {
+        let strings = Vec::from_raw_parts(buf.tokens, buf.len, buf.len);
+        for s in strings {
+            drop(std::ffi::CString::from_raw(s));
+        }
+    }
 }
 
 /// Frees a tokenizer instance.
