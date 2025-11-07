@@ -18,10 +18,10 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        # Check if Rust source files changed in this PR/commit
+        # For PRs, always build locally to ensure we test against latest code
         RUST_CHANGED=0
-        if git diff --name-only HEAD~1 2>/dev/null | grep -q -E '^(src/|Cargo\.)'; then
-          echo "Rust source files changed, forcing local build"
+        if [ -n "$GITHUB_BASE_REF" ]; then
+          echo "Pull request detected, building locally"
           RUST_CHANGED=1
         fi
 
@@ -77,10 +77,10 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        # Check if Rust source files changed in this PR/commit
+        # For PRs, always build locally to ensure we test against latest code
         RUST_CHANGED=0
-        if git diff --name-only HEAD~1 2>/dev/null | grep -q -E '^(src/|Cargo\.)'; then
-          echo "Rust source files changed, forcing local build"
+        if [ -n "$GITHUB_BASE_REF" ]; then
+          echo "Pull request detected, building locally"
           RUST_CHANGED=1
         fi
 
@@ -142,16 +142,11 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        # Check if Rust source files changed in this PR/commit
+        # For PRs, always build locally to ensure we test against latest code
         $rustChanged = $false
-        try {
-          $changedFiles = git diff --name-only HEAD~1 2>&1
-          if ($changedFiles -match '^(src/|Cargo\.)') {
-            Write-Host "Rust source files changed, forcing local build"
-            $rustChanged = $true
-          }
-        } catch {
-          Write-Host "Could not check for changed files, will attempt to download release"
+        if ($env:GITHUB_BASE_REF) {
+          Write-Host "Pull request detected, building locally"
+          $rustChanged = $true
         }
 
         $ErrorActionPreference = "Continue"
