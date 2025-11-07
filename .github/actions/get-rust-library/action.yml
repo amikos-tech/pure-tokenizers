@@ -18,13 +18,24 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        # Check if Rust source files changed in this PR/commit
+        RUST_CHANGED=0
+        if git diff --name-only HEAD~1 2>/dev/null | grep -q -E '^(src/|Cargo\.)'; then
+          echo "Rust source files changed, forcing local build"
+          RUST_CHANGED=1
+        fi
+
         set +e  # Temporarily disable exit on error
         # Extract rust-v* tag from release list (handles new format with release titles)
         # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
         LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep "rust-v" | head -1 | grep -o 'rust-v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         set -e  # Re-enable exit on error
-        if [ -z "$LATEST_RELEASE" ]; then
-          echo "No Rust release found, building locally"
+        if [ -z "$LATEST_RELEASE" ] || [ "$RUST_CHANGED" = "1" ]; then
+          if [ "$RUST_CHANGED" = "1" ]; then
+            echo "Rust source changed, building locally"
+          else
+            echo "No Rust release found, building locally"
+          fi
           cargo build --release
           echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.so" >> $GITHUB_ENV
         else
@@ -66,6 +77,13 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        # Check if Rust source files changed in this PR/commit
+        RUST_CHANGED=0
+        if git diff --name-only HEAD~1 2>/dev/null | grep -q -E '^(src/|Cargo\.)'; then
+          echo "Rust source files changed, forcing local build"
+          RUST_CHANGED=1
+        fi
+
         set +e  # Temporarily disable exit on error
         ARCH=$(uname -m)
         if [ "$ARCH" = "arm64" ]; then
@@ -77,8 +95,12 @@ runs:
         # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
         LATEST_RELEASE=$(gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | grep "rust-v" | head -1 | grep -o 'rust-v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         set -e  # Re-enable exit on error
-        if [ -z "$LATEST_RELEASE" ]; then
-          echo "No Rust release found, building locally"
+        if [ -z "$LATEST_RELEASE" ] || [ "$RUST_CHANGED" = "1" ]; then
+          if [ "$RUST_CHANGED" = "1" ]; then
+            echo "Rust source changed, building locally"
+          else
+            echo "No Rust release found, building locally"
+          fi
           cargo build --release
           echo "TOKENIZERS_LIB_PATH=$(pwd)/target/release/libtokenizers.dylib" >> $GITHUB_ENV
         else
@@ -120,12 +142,24 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        # Check if Rust source files changed in this PR/commit
+        $rustChanged = $false
+        try {
+          $changedFiles = git diff --name-only HEAD~1 2>&1
+          if ($changedFiles -match '^(src/|Cargo\.)') {
+            Write-Host "Rust source files changed, forcing local build"
+            $rustChanged = $true
+          }
+        } catch {
+          Write-Host "Could not check for changed files, will attempt to download release"
+        }
+
         $ErrorActionPreference = "Continue"
         # Extract rust-v* tag from release list (handles new format with release titles)
         # Pattern matches semver: rust-vMAJOR.MINOR.PATCH
         $releaseOutput = gh release list --repo ${{ inputs.repository }} --limit 10 2>&1 | Select-String -Pattern "rust-v\d+\.\d+\.\d+" | Select-Object -First 1
         $ErrorActionPreference = "Stop"
-        if ($releaseOutput) {
+        if ($releaseOutput -and -not $rustChanged) {
           # Extract the rust-v* tag using regex with strict semver pattern
           if ($releaseOutput -match 'rust-v\d+\.\d+\.\d+') {
             $releaseTag = $matches[0]
@@ -136,6 +170,10 @@ runs:
           # Validate that split succeeded
           if (-not $releaseTag) {
             Write-Host "Failed to parse release tag, building locally"
+            cargo build --release
+            "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } elseif ($rustChanged) {
+            Write-Host "Rust source changed, building locally"
             cargo build --release
             "TOKENIZERS_LIB_PATH=$(Get-Location)\target\release\tokenizers.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
           } else {
