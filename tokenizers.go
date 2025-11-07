@@ -444,13 +444,19 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 		}
 	}
 
-	// Convert Go strings to C strings
+	// Convert Go strings to null-terminated C strings
+	// Go strings are not null-terminated, but Rust's CStr::from_ptr() expects them to be
 	cSequences := make([]*byte, len(sequences))
 	cPairs := make([]*byte, len(pairs))
+	cSeqBytes := make([][]byte, len(sequences))
+	cPairBytes := make([][]byte, len(pairs))
 
 	for i := 0; i < len(sequences); i++ {
-		cSequences[i] = unsafe.StringData(sequences[i])
-		cPairs[i] = unsafe.StringData(pairs[i])
+		// Append null terminator and keep reference to prevent GC
+		cSeqBytes[i] = append([]byte(sequences[i]), 0)
+		cPairBytes[i] = append([]byte(pairs[i]), 0)
+		cSequences[i] = &cSeqBytes[i][0]
+		cPairs[i] = &cPairBytes[i][0]
 	}
 
 	// Allocate output buffers

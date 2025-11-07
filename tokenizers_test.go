@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -519,6 +520,19 @@ func TestEncodePairs(t *testing.T) {
 			require.Greater(t, len(res.AttentionMask), 0, "Result %d should have attention mask", i)
 			require.Greater(t, len(res.Offsets), 0, "Result %d should have offsets", i)
 		}
+	})
+
+	t.Run("Null termination with long strings", func(t *testing.T) {
+		// Test with longer strings to ensure null termination works correctly
+		// Longer strings are less likely to have lucky null bytes in adjacent memory
+		longSeq := strings.Repeat("A", 100)
+		longPair := strings.Repeat("B", 100)
+
+		results, err := tok.EncodePairs([]string{longSeq}, []string{longPair}, WithReturnTokens())
+		require.NoError(t, err, "Failed to encode long strings")
+		require.Len(t, results, 1)
+		require.Greater(t, len(results[0].IDs), 0, "Should have token IDs")
+		require.Greater(t, len(results[0].Tokens), 0, "Should have tokens")
 	})
 }
 
