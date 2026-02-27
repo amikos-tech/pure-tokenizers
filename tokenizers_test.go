@@ -2,6 +2,7 @@ package tokenizers
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -200,6 +201,17 @@ func TestResolveChecksumsURL(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
 	})
+}
+
+func TestIsAllowedChecksumsHost(t *testing.T) {
+	releasesURL, err := url.Parse(ReleasesBaseURL)
+	require.NoError(t, err)
+
+	require.True(t, isAllowedChecksumsHost(releasesURL.Hostname()))
+	require.True(t, isAllowedChecksumsHost(strings.ToUpper(releasesURL.Hostname())))
+	require.True(t, isAllowedChecksumsHost("objects.githubusercontent.com"))
+	require.False(t, isAllowedChecksumsHost(""))
+	require.False(t, isAllowedChecksumsHost("cdn.example.com"))
 }
 
 func TestChecksumForAsset(t *testing.T) {

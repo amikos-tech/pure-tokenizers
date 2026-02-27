@@ -21,3 +21,4 @@ go.work.sum
 /unit.xml
 target/
 .agents/skills/releasing-to-r2/
+skills-lock.json

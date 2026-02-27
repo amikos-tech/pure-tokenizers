@@ -31,18 +31,37 @@ const (
 	ReleasesProject = "pure-tokenizers"
 	DefaultTag      = "latest"
 	DownloadTimeout = 30 * time.Second
+	// gitHubReleasesPageSize is the number of releases fetched per API page.
+	gitHubReleasesPageSize = 100
+	// gitHubReleasesMaxPages bounds pagination while still covering large histories.
+	gitHubReleasesMaxPages = 20
 	// apiVer is the GitHub REST API version sent via X-GitHub-Api-Version.
 	apiVer = "2022-11-28"
 )
 
 var (
-	warnDownloadFallbackOnce   sync.Once
 	warnVersionsFallbackOnce   sync.Once
 	warnIgnoredLegacyRepoEnv   sync.Once
 	libraryABIVerifiedMu       sync.RWMutex
 	libraryABIVerifiedByPath   = make(map[string]string)
 	errChecksumAssetNotFound   = errors.New("checksum for asset not found")
 	errChecksumManifestInvalid = errors.New("invalid checksum manifest")
+	releasesBaseHostname       = func() string {
+		parsed, err := url.Parse(ReleasesBaseURL)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	}()
+	allowedChecksumsHosts = func() map[string]struct{} {
+		hosts := map[string]struct{}{
+			"objects.githubusercontent.com": {},
+		}
+		if releasesBaseHostname != "" {
+			hosts[releasesBaseHostname] = struct{}{}
+		}
+		return hosts
+	}()
 )
 
 // getPlatformAssetName returns the expected asset name for the current platform
@@ -269,18 +288,8 @@ func isAllowedChecksumsHost(host string) bool {
 	if normalized == "" {
 		return false
 	}
-
-	releasesURL, err := url.Parse(ReleasesBaseURL)
-	if err == nil && normalized == strings.ToLower(releasesURL.Hostname()) {
-		return true
-	}
-
-	switch normalized {
-	case "objects.githubusercontent.com":
-		return true
-	default:
-		return false
-	}
+	_, ok := allowedChecksumsHosts[normalized]
+	return ok
 }
 
 func buildReleaseURL(parts ...string) string {
@@ -347,19 +356,36 @@ func fetchGitHubReleaseByTag(tag string) (*gitHubRelease, error) {
 }
 
 func fetchLatestGitHubRustRelease() (*gitHubRelease, error) {
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=100", GitHubRepo)
+	for page := 1; page <= gitHubReleasesMaxPages; page++ {
+		endpoint := fmt.Sprintf(
+			"https://api.github.com/repos/%s/releases?per_page=%d&page=%d",
+			GitHubRepo,
+			gitHubReleasesPageSize,
+			page,
+		)
 
-	var releases []gitHubRelease
-	if err := downloadJSON(endpoint, &releases); err != nil {
-		return nil, fmt.Errorf("failed to fetch GitHub releases list: %w", err)
-	}
-	// GitHub returns releases newest-first, so the first rust-v* tag on page 1 is the latest.
-	for _, release := range releases {
-		if strings.HasPrefix(strings.TrimSpace(release.TagName), "rust-v") {
-			return &release, nil
+		var releases []gitHubRelease
+		if err := downloadJSON(endpoint, &releases); err != nil {
+			return nil, fmt.Errorf("failed to fetch GitHub releases list page %d: %w", page, err)
+		}
+
+		// GitHub returns releases newest-first, so the first rust-v* tag encountered is the latest.
+		for _, release := range releases {
+			if strings.HasPrefix(strings.TrimSpace(release.TagName), "rust-v") {
+				return &release, nil
+			}
+		}
+
+		// No more pages to scan.
+		if len(releases) < gitHubReleasesPageSize {
+			break
 		}
 	}
-	return nil, fmt.Errorf("no rust-v* releases found in GitHub repository %s", GitHubRepo)
+	return nil, fmt.Errorf(
+		"no rust-v* releases found in first %d GitHub release page(s) for repository %s",
+		gitHubReleasesMaxPages,
+		GitHubRepo,
+	)
 }
 
 func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
@@ -459,13 +485,11 @@ func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
 		return nil
 	}
 
-	warnDownloadFallbackOnce.Do(func() {
-		_, _ = fmt.Fprintf(
-			os.Stderr,
-			"warning: releases endpoint download failed, falling back to GitHub Releases (%v)\n",
-			primaryErr,
-		)
-	})
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"warning: releases endpoint download failed, falling back to GitHub Releases (%v)\n",
+		primaryErr,
+	)
 
 	if fallbackErr := downloadFromGitHubWithVersion(destPath, version); fallbackErr != nil {
 		return fmt.Errorf("download failed from releases endpoint (%v) and GitHub fallback (%w)", primaryErr, fallbackErr)
