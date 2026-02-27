@@ -1,6 +1,7 @@
 package tokenizers
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,10 @@ func checkLibraryExists(t *testing.T) string {
 			t.Skipf("Skipping test because %s does not exist", libPath)
 			return ""
 		}
+		if err := verifyLibraryABICompatibility(libPath); err != nil {
+			t.Skipf("Skipping test because %s is ABI/symbol incompatible: %v", libPath, err)
+			return ""
+		}
 		return libPath
 	}
 	switch runtime.GOOS {
@@ -38,6 +43,10 @@ func checkLibraryExists(t *testing.T) string {
 
 	if _, err := os.Stat(libPath); os.IsNotExist(err) {
 		t.Skipf("Skipping test because %s does not exist", libPath)
+	}
+	if err := verifyLibraryABICompatibility(libPath); err != nil {
+		t.Skipf("Skipping test because %s is ABI/symbol incompatible: %v", libPath, err)
+		return ""
 	}
 	return libPath
 }
@@ -72,6 +81,175 @@ func TestGetPlatformAssetName(t *testing.T) {
 	if runtime.GOOS == "windows" && !contains(assetName, "pc-windows-msvc") {
 		t.Errorf("Expected asset name to contain 'pc-windows-msvc' for Windows, got: %s", assetName)
 	}
+}
+
+func TestNormalizeReleaseVersion(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: "latest"},
+		{name: "latest", input: "latest", expected: "latest"},
+		{name: "already normalized", input: "rust-v0.1.3", expected: "rust-v0.1.3"},
+		{name: "v prefix", input: "v0.1.3", expected: "rust-v0.1.3"},
+		{name: "raw semver", input: "0.1.3", expected: "rust-v0.1.3"},
+		{name: "legacy rust tag", input: "rust-0.1.3", expected: "rust-v0.1.3"},
+		{name: "non semver rust prefix", input: "rust-nightly", expected: "rust-nightly"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeReleaseVersion(tc.input)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+func TestGetReleasesProject(t *testing.T) {
+	require.Equal(t, ReleasesProject, getReleasesProject())
+}
+
+func TestBuildReleaseURL(t *testing.T) {
+	require.Equal(
+		t,
+		"https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS",
+		buildReleaseURL("/pure-tokenizers/", "/rust-v0.1.0/", "SHA256SUMS"),
+	)
+	require.Equal(t, "https://releases.amikos.tech", buildReleaseURL("", "/"))
+}
+
+func TestSetRequestHeaders(t *testing.T) {
+	t.Run("github host prefers GITHUB_TOKEN and includes api version", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "test-gh-token")
+		t.Setenv("GH_TOKEN", "test-gh-cli-token")
+		req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/amikos-tech/pure-tokenizers/releases", nil)
+		require.NoError(t, err)
+
+		setRequestHeaders(req, "application/json")
+
+		require.Equal(t, "application/json", req.Header.Get("Accept"))
+		require.Equal(t, "pure-tokenizers-downloader", req.Header.Get("User-Agent"))
+		require.Equal(t, apiVer, req.Header.Get("X-GitHub-Api-Version"))
+		require.Equal(t, "Bearer test-gh-token", req.Header.Get("Authorization"))
+	})
+
+	t.Run("github host uses GH_TOKEN when GITHUB_TOKEN is absent", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "")
+		t.Setenv("GH_TOKEN", "test-gh-cli-token")
+		req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/amikos-tech/pure-tokenizers/releases", nil)
+		require.NoError(t, err)
+
+		setRequestHeaders(req, "application/json")
+
+		require.Equal(t, "application/json", req.Header.Get("Accept"))
+		require.Equal(t, "pure-tokenizers-downloader", req.Header.Get("User-Agent"))
+		require.Equal(t, apiVer, req.Header.Get("X-GitHub-Api-Version"))
+		require.Equal(t, "Bearer test-gh-cli-token", req.Header.Get("Authorization"))
+	})
+
+	t.Run("non github host never includes github auth headers", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "test-gh-token")
+		t.Setenv("GH_TOKEN", "test-gh-cli-token")
+		req, err := http.NewRequest(http.MethodGet, "https://releases.amikos.tech/pure-tokenizers/latest.json", nil)
+		require.NoError(t, err)
+
+		setRequestHeaders(req, "application/json")
+
+		require.Equal(t, "application/json", req.Header.Get("Accept"))
+		require.Equal(t, "pure-tokenizers-downloader", req.Header.Get("User-Agent"))
+		require.Empty(t, req.Header.Get("X-GitHub-Api-Version"))
+		require.Empty(t, req.Header.Get("Authorization"))
+	})
+}
+
+func TestResolveChecksumsURL(t *testing.T) {
+	t.Run("default path", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", nil)
+		require.NoError(t, err)
+		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
+	})
+
+	t.Run("relative checksums url", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "pure-tokenizers/rust-v0.1.0/SHA256SUMS"})
+		require.NoError(t, err)
+		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
+	})
+
+	t.Run("absolute https checksums url", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://cdn.example.com/SHA256SUMS"})
+		require.NoError(t, err)
+		require.Equal(t, "https://cdn.example.com/SHA256SUMS", url)
+	})
+
+	t.Run("absolute http checksums url rejected", func(t *testing.T) {
+		_, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "http://cdn.example.com/SHA256SUMS"})
+		require.Error(t, err)
+	})
+}
+
+func TestChecksumForAsset(t *testing.T) {
+	sumA := strings.Repeat("a", 64)
+	sumB := strings.Repeat("b", 64)
+	assetName := "libtokenizers-x86_64-apple-darwin.tar.gz"
+
+	t.Run("extract checksum from manifest", func(t *testing.T) {
+		manifest := sumA + "  " + assetName + "\n" + sumB + "  other.tar.gz\n"
+		sum, err := checksumForAsset(manifest, assetName)
+		require.NoError(t, err)
+		require.Equal(t, sumA, sum)
+	})
+
+	t.Run("extract checksum from star-prefixed entry", func(t *testing.T) {
+		manifest := sumA + " *" + assetName + "\n"
+		sum, err := checksumForAsset(manifest, assetName)
+		require.NoError(t, err)
+		require.Equal(t, sumA, sum)
+	})
+
+	t.Run("missing asset entry", func(t *testing.T) {
+		manifest := sumA + "  other.tar.gz\n"
+		_, err := checksumForAsset(manifest, assetName)
+		require.ErrorIs(t, err, errChecksumAssetNotFound)
+	})
+
+	t.Run("invalid manifest entry", func(t *testing.T) {
+		manifest := "not-a-valid-line\n"
+		_, err := checksumForAsset(manifest, assetName)
+		require.ErrorIs(t, err, errChecksumManifestInvalid)
+	})
+
+	t.Run("empty manifest", func(t *testing.T) {
+		_, err := checksumForAsset("", assetName)
+		require.ErrorIs(t, err, errChecksumManifestInvalid)
+	})
+
+	t.Run("comment-only manifest", func(t *testing.T) {
+		_, err := checksumForAsset("# comment\n   # another\n", assetName)
+		require.ErrorIs(t, err, errChecksumManifestInvalid)
+	})
+}
+
+func TestLooksLikeSHA256(t *testing.T) {
+	t.Run("valid lowercase hash", func(t *testing.T) {
+		require.True(t, looksLikeSHA256(strings.Repeat("a", 64)))
+	})
+
+	t.Run("valid uppercase hash", func(t *testing.T) {
+		require.True(t, looksLikeSHA256(strings.Repeat("A", 64)))
+	})
+
+	t.Run("too short", func(t *testing.T) {
+		require.False(t, looksLikeSHA256(strings.Repeat("a", 63)))
+	})
+
+	t.Run("too long", func(t *testing.T) {
+		require.False(t, looksLikeSHA256(strings.Repeat("a", 65)))
+	})
+
+	t.Run("contains non-hex", func(t *testing.T) {
+		require.False(t, looksLikeSHA256(strings.Repeat("a", 63)+"g"))
+	})
 }
 
 func TestGetCachedLibraryPath(t *testing.T) {
@@ -148,6 +326,7 @@ func TestGetLibraryInfo(t *testing.T) {
 	requiredFields := []string{
 		"platform_asset_name", "library_name", "cache_path",
 		"cache_dir", "is_cached", "github_repo", "version",
+		"releases_base_url", "releases_project",
 	}
 
 	for _, field := range requiredFields {
@@ -173,12 +352,16 @@ func TestDownloadFunctionality(t *testing.T) {
 	// Note: These may fail if no releases exist, but should not panic
 
 	t.Run("GetAvailableVersions", func(t *testing.T) {
+		strict := os.Getenv("TOKENIZERS_REQUIRE_ONLINE_TESTS") == "1"
 		versions, err := GetAvailableVersions()
 		if err != nil {
-			t.Logf("GetAvailableVersions failed (expected if no releases): %v", err)
-		} else {
-			t.Logf("Available versions: %v", versions)
+			if strict {
+				require.NoError(t, err, "expected releases endpoint or GitHub fallback to resolve versions")
+			}
+			t.Skipf("GetAvailableVersions unavailable in this environment: %v", err)
 		}
+		require.NotEmpty(t, versions)
+		t.Logf("Available versions: %v", versions)
 	})
 
 	t.Run("IsLibraryCached", func(t *testing.T) {

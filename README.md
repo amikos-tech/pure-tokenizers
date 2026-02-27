@@ -259,9 +259,8 @@ tokenizer, err := tokenizers.FromFile("tokenizer.json",
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TOKENIZERS_LIB_PATH` | Custom library path | Auto-detect |
-| `TOKENIZERS_GITHUB_REPO` | GitHub repo for downloads | `amikos-tech/pure-tokenizers` |
 | `TOKENIZERS_VERSION` | Library version to download | `latest` |
-| `GITHUB_TOKEN` | GitHub API token (for rate limits) | None |
+| `GITHUB_TOKEN` / `GH_TOKEN` | Optional token for GitHub API/authenticated fallback requests | unset |
 
 ### Library Loading Options
 
@@ -274,7 +273,7 @@ tokenizer, err := tokenizers.FromFile("tokenizer.json",
 // 1. User-provided path via WithLibraryPath()
 // 2. TOKENIZERS_LIB_PATH environment variable
 // 3. Cached library in platform directory
-// 4. Automatic download from GitHub releases
+// 4. Automatic download from releases.amikos.tech (with GitHub Releases fallback)
 ```
 
 ### Cache Management

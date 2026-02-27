@@ -14,11 +14,14 @@ import (
 // 1. User-provided path
 // 2. TOKENIZERS_LIB_PATH environment variable
 // 3. Cached library in platform-specific directory
-// 4. Automatic download from GitHub releases
+// 4. Automatic download from releases.amikos.tech (with GitHub Releases fallback)
 func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 1: User-provided path
 	if userPath != "" {
 		if _, err := os.Stat(userPath); err == nil {
+			if err := verifyLibraryABICompatibility(userPath); err != nil {
+				return 0, errors.Wrapf(err, "library at user-provided path is ABI/symbol incompatible: %s", userPath)
+			}
 			libh, err := loadLibrary(userPath)
 			if err == nil {
 				return libh, nil
@@ -31,6 +34,9 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 2: Environment variable
 	if envPath := os.Getenv("TOKENIZERS_LIB_PATH"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
+			if err := verifyLibraryABICompatibility(envPath); err != nil {
+				return 0, errors.Wrapf(err, "library at TOKENIZERS_LIB_PATH is ABI/symbol incompatible: %s", envPath)
+			}
 			libh, err := loadLibrary(envPath)
 			if err == nil {
 				return libh, nil
@@ -42,23 +48,51 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 
 	// Priority 3: Cached library
 	cachedPath := GetCachedLibraryPath()
+	var cachedLoadErr error
 	if isLibraryValid(cachedPath) {
-		libh, err := loadLibrary(cachedPath)
-		if err == nil {
-			return libh, nil
+		shouldClearCache := false
+
+		if err := verifyLibraryABICompatibility(cachedPath); err != nil {
+			cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
+			shouldClearCache = true
 		}
-		// If cached library fails to load, try to re-download
-		_ = ClearLibraryCache()
+
+		if cachedLoadErr == nil {
+			libh, err := loadLibrary(cachedPath)
+			if err == nil {
+				return libh, nil
+			}
+			cachedLoadErr = errors.Wrapf(err, "failed to load cached library from %s", cachedPath)
+			shouldClearCache = true
+		}
+
+		// If cached library fails compatibility or load, clear cache once and re-download.
+		if shouldClearCache {
+			if clearErr := ClearLibraryCache(); clearErr != nil {
+				_, _ = fmt.Fprintf(
+					os.Stderr,
+					"warning: failed to clear cached library %s (%v); continuing with re-download attempt\n",
+					cachedPath,
+					clearErr,
+				)
+			}
+		}
 	}
 
-	// Priority 4: Download from GitHub
+	// Priority 4: Download from releases endpoint (with GitHub fallback)
 	if err := DownloadAndCacheLibrary(); err != nil {
-		return 0, errors.Wrap(err, "failed to download library from GitHub releases")
+		if cachedLoadErr != nil {
+			return 0, errors.Wrapf(err, "failed to download library after cached load error: %v", cachedLoadErr)
+		}
+		return 0, errors.Wrap(err, "failed to download library from release endpoint")
 	}
 
 	// Try loading the newly downloaded library
 	libh, err := loadLibrary(cachedPath)
 	if err != nil {
+		if cachedLoadErr != nil {
+			return 0, errors.Wrapf(err, "failed to load downloaded library from %s (previous cached load error: %v)", cachedPath, cachedLoadErr)
+		}
 		return 0, errors.Wrapf(err, "failed to load downloaded library from: %s", cachedPath)
 	}
 

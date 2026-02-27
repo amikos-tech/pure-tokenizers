@@ -20,3 +20,4 @@ go.work.sum
 .env
 /unit.xml
 target/
+.agents/skills/releasing-to-r2/

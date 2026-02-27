@@ -6,20 +6,41 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/ebitengine/purego"
 )
 
 const (
-	GitHubRepo      = "amikos-tech/pure-tokenizers"
+	// GitHubRepo is the fixed GitHub repository used for fallback downloads.
+	GitHubRepo = "amikos-tech/pure-tokenizers"
+	// ReleasesBaseURL is the fixed public endpoint for release artifacts.
+	ReleasesBaseURL = "https://releases.amikos.tech"
+	// ReleasesProject is the fixed project path under the releases domain.
+	ReleasesProject = "pure-tokenizers"
 	DefaultTag      = "latest"
 	DownloadTimeout = 30 * time.Second
+	// apiVer is the GitHub REST API version sent via X-GitHub-Api-Version.
+	apiVer = "2022-11-28"
+)
+
+var (
+	warnDownloadFallbackOnce   sync.Once
+	warnVersionsFallbackOnce   sync.Once
+	warnIgnoredLegacyRepoEnv   sync.Once
+	errChecksumAssetNotFound   = errors.New("checksum for asset not found")
+	errChecksumManifestInvalid = errors.New("invalid checksum manifest")
 )
 
 // getPlatformAssetName returns the expected asset name for the current platform
@@ -53,7 +74,8 @@ func getPlatformAssetName() string {
 	return fmt.Sprintf("libtokenizers-%s-%s.tar.gz", arch, platform)
 }
 
-// DownloadLibraryFromGitHub downloads the platform-specific library from GitHub releases
+// DownloadLibraryFromGitHub downloads the platform-specific library.
+// Legacy name is kept for API compatibility. Downloads use releases.amikos.tech first, then GitHub fallback.
 func DownloadLibraryFromGitHub(destPath string) error {
 	version := getVersionTag()
 	return DownloadLibraryFromGitHubWithVersion(destPath, version)
@@ -62,20 +84,11 @@ func DownloadLibraryFromGitHub(destPath string) error {
 // downloadFile downloads a file from the given URL to the destination path
 func downloadFile(url, dest string) error {
 	client := &http.Client{Timeout: DownloadTimeout}
-	req, _ := http.NewRequest("GET",
-		url, nil)
-
-	// Headers required/recommended by GitHub
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", apiVer)
-	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
-
-	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
-	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request for %s: %w", url, err)
 	}
+	setRequestHeaders(req, "*/*")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -86,7 +99,7 @@ func downloadFile(url, dest string) error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, resp.Status)
+		return fmt.Errorf("download failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
 	}
 
 	out, err := os.Create(dest)
@@ -105,10 +118,49 @@ func downloadFile(url, dest string) error {
 	return nil
 }
 
+func setRequestHeaders(req *http.Request, accept string) {
+	req.Header.Set("Accept", accept)
+	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+
+	// Only attach GitHub-specific headers/tokens when talking to GitHub APIs.
+	if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
+		req.Header.Set("X-GitHub-Api-Version", apiVer)
+		if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
+}
+
+func downloadJSON(url string, out any) error {
+	client := &http.Client{Timeout: DownloadTimeout}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request for %s: %w", url, err)
+	}
+	setRequestHeaders(req, "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to fetch JSON from %s: %w", url, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("failed to decode JSON from %s: %w", url, err)
+	}
+	return nil
+}
+
 // verifyChecksum verifies the SHA256 checksum of the downloaded file
 func verifyChecksum(filePath, checksumData string) error {
-	// Read the expected checksum
-
 	expectedChecksum := strings.TrimSpace(checksumData)
 	// Handle format like "abc123  filename.tar.gz"
 	if parts := strings.Fields(expectedChecksum); len(parts) >= 1 {
@@ -195,63 +247,132 @@ func extractLibrary(archivePath, destPath string) error {
 	return fmt.Errorf("library file %s not found in archive", libraryName)
 }
 
-// GitHub API structures
-type GitHubRelease struct {
-	TagName string        `json:"tag_name"`
-	Assets  []GitHubAsset `json:"assets"`
+type releaseIndex struct {
+	Version      string `json:"version"`
+	ChecksumsURL string `json:"checksums_url"`
 }
 
-type GitHubAsset struct {
+type gitHubRelease struct {
+	TagName string        `json:"tag_name"`
+	Assets  []gitHubAsset `json:"assets"`
+}
+
+type gitHubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
-	Digest             string `json:"digest,omitempty"` // Optional field for checksums
 }
 
-// fetchLatestRelease fetches the latest release information from GitHub API
-func fetchLatestRelease(url string) (*GitHubRelease, error) {
-	client := &http.Client{Timeout: DownloadTimeout}
+// getGitHubRepo returns the fixed GitHub fallback repository.
+func getGitHubRepo() string {
+	return GitHubRepo
+}
 
-	req, _ := http.NewRequest("GET",
-		url, nil)
+func getReleasesBaseURL() string {
+	return ReleasesBaseURL
+}
 
-	// Headers required/recommended by GitHub
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", apiVer)
-	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
+func getReleasesProject() string {
+	return ReleasesProject
+}
 
-	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
-	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
+func buildReleaseURL(parts ...string) string {
+	base := getReleasesBaseURL()
+	pathParts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		part := strings.Trim(p, "/")
+		if part != "" {
+			pathParts = append(pathParts, part)
+		}
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch release info: %w", err)
+	if len(pathParts) == 0 {
+		return base
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	return fmt.Sprintf("%s/%s", base, strings.Join(pathParts, "/"))
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
+func normalizeReleaseVersion(version string) string {
+	v := strings.TrimSpace(version)
+	switch {
+	case v == "" || v == DefaultTag:
+		return DefaultTag
+	case strings.HasPrefix(v, "rust-v"):
+		return v
+	case strings.HasPrefix(v, "rust-"):
+		suffix := strings.TrimPrefix(v, "rust-")
+		if suffix == "" {
+			return v
+		}
+		if suffix[0] >= '0' && suffix[0] <= '9' {
+			return "rust-v" + suffix
+		}
+		return v
+	case strings.HasPrefix(v, "v"):
+		return "rust-" + v
+	default:
+		return "rust-v" + v
 	}
+}
 
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, fmt.Errorf("failed to decode release JSON: %w", err)
+func fetchLatestReleaseIndex() (*releaseIndex, error) {
+	url := buildReleaseURL(getReleasesProject(), "latest.json")
+	var idx releaseIndex
+	if err := downloadJSON(url, &idx); err != nil {
+		return nil, err
 	}
+	if strings.TrimSpace(idx.Version) == "" {
+		return nil, fmt.Errorf("latest.json at %s is missing version", url)
+	}
+	return &idx, nil
+}
 
+func fetchGitHubReleaseByTag(tag string) (*gitHubRelease, error) {
+	repo := getGitHubRepo()
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, tag)
+
+	var release gitHubRelease
+	if err := downloadJSON(endpoint, &release); err != nil {
+		return nil, fmt.Errorf("failed to fetch GitHub release %s: %w", tag, err)
+	}
+	if strings.TrimSpace(release.TagName) == "" {
+		return nil, fmt.Errorf("GitHub release payload missing tag name for %s", tag)
+	}
 	return &release, nil
 }
 
-// getGitHubRepo returns the GitHub repository to download from
-func getGitHubRepo() string {
-	if repo := os.Getenv("TOKENIZERS_GITHUB_REPO"); repo != "" {
-		return repo
+func fetchLatestGitHubRustRelease() (*gitHubRelease, error) {
+	repo := getGitHubRepo()
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
+
+	var releases []gitHubRelease
+	if err := downloadJSON(endpoint, &releases); err != nil {
+		return nil, fmt.Errorf("failed to fetch GitHub releases list: %w", err)
 	}
-	return GitHubRepo
+	for _, release := range releases {
+		if strings.HasPrefix(strings.TrimSpace(release.TagName), "rust-v") {
+			return &release, nil
+		}
+	}
+	return nil, fmt.Errorf("no rust-v* releases found in GitHub repository %s", repo)
+}
+
+func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
+	if idx != nil {
+		checksumsURL := strings.TrimSpace(idx.ChecksumsURL)
+		if checksumsURL != "" {
+			parsed, err := url.Parse(checksumsURL)
+			if err != nil {
+				return "", fmt.Errorf("invalid checksums_url %q: %w", checksumsURL, err)
+			}
+			if parsed.IsAbs() {
+				if !strings.EqualFold(parsed.Scheme, "https") {
+					return "", fmt.Errorf("invalid checksums_url scheme %q: only https is allowed", parsed.Scheme)
+				}
+				return checksumsURL, nil
+			}
+			return buildReleaseURL(checksumsURL), nil
+		}
+	}
+	return buildReleaseURL(getReleasesProject(), version, "SHA256SUMS"), nil
 }
 
 // getVersionTag returns the version tag to download
@@ -262,65 +383,98 @@ func getVersionTag() string {
 	return DefaultTag
 }
 
-// DownloadLibraryFromGitHubWithVersion downloads a specific version of the library
+func warnIfIgnoredLegacyRepoEnvSet() {
+	if os.Getenv("TOKENIZERS_GITHUB_REPO") == "" {
+		return
+	}
+	warnIgnoredLegacyRepoEnv.Do(func() {
+		_, _ = fmt.Fprintln(
+			os.Stderr,
+			"warning: TOKENIZERS_GITHUB_REPO is ignored; fallback repository is fixed to amikos-tech/pure-tokenizers",
+		)
+	})
+}
+
+// DownloadLibraryFromGitHubWithVersion downloads a specific version of the library.
+// Legacy name is kept for API compatibility.
+// Downloads are attempted from releases.amikos.tech first, then fallback to GitHub Releases.
 func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
+	warnIfIgnoredLegacyRepoEnvSet()
+
 	// Ensure destination directory exists
 	destDir := filepath.Dir(destPath)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	repo := getGitHubRepo()
-	var releaseURL string
-
-	if version == "latest" || version == "" {
-		// For latest, we need to find the latest rust-v* release
-		versions, err := GetAvailableVersions()
-		if err != nil {
-			return fmt.Errorf("failed to get available versions: %w", err)
-		}
-		if len(versions) == 0 {
-			return fmt.Errorf("no rust library releases found")
-		}
-		// Use the first one (most recent)
-		version = versions[0]
-		releaseURL = fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, version)
-	} else {
-		// If version doesn't start with rust-v, add it
-		if !strings.HasPrefix(version, "rust-v") {
-			version = "rust-" + version
-		}
-		releaseURL = fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, version)
+	primaryErr := downloadFromReleasesWithVersion(destPath, version)
+	if primaryErr == nil {
+		return nil
 	}
 
-	release, err := fetchLatestRelease(releaseURL)
-	if err != nil {
-		return fmt.Errorf("failed to fetch release %s: %w", version, err)
-	}
+	warnDownloadFallbackOnce.Do(func() {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"warning: releases endpoint download failed, falling back to GitHub Releases (%v)\n",
+			primaryErr,
+		)
+	})
 
-	return downloadAndExtractLibrary(release, destPath)
+	if fallbackErr := downloadFromGitHubWithVersion(destPath, version); fallbackErr != nil {
+		return fmt.Errorf("download failed from releases endpoint (%v) and GitHub fallback (%w)", primaryErr, fallbackErr)
+	}
+	return nil
 }
 
-// downloadAndExtractLibrary handles the common download and extraction logic
-func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
-	assetName := getPlatformAssetName()
-	// Find the asset URLs
-	var assetURL, assetChecksum string
-	for _, asset := range release.Assets {
-		switch asset.Name {
-		case assetName:
-			assetURL = asset.BrowserDownloadURL
-			assetChecksum = asset.Digest // Optional checksum field
+func downloadFromReleasesWithVersion(destPath, version string) error {
+	resolvedVersion := normalizeReleaseVersion(version)
+	var idx *releaseIndex
+	var err error
+	if resolvedVersion == DefaultTag {
+		idx, err = fetchLatestReleaseIndex()
+		if err != nil {
+			return fmt.Errorf("failed to fetch latest release metadata: %w", err)
 		}
+		resolvedVersion = normalizeReleaseVersion(idx.Version)
 	}
 
-	if assetURL == "" {
-		return fmt.Errorf("asset %s not found in release %s", assetName, release.TagName)
+	if resolvedVersion == DefaultTag {
+		return fmt.Errorf("failed to resolve a concrete release version from %q", version)
 	}
+
+	checksumsURL, err := resolveChecksumsURL(resolvedVersion, idx)
+	if err != nil {
+		return fmt.Errorf("failed to resolve checksums URL: %w", err)
+	}
+
+	return downloadAndExtractLibraryFromReleases(resolvedVersion, checksumsURL, destPath)
+}
+
+func downloadFromGitHubWithVersion(destPath, version string) error {
+	resolvedVersion := normalizeReleaseVersion(version)
+
+	var release *gitHubRelease
+	var err error
+	if resolvedVersion == DefaultTag {
+		release, err = fetchLatestGitHubRustRelease()
+	} else {
+		release, err = fetchGitHubReleaseByTag(resolvedVersion)
+	}
+	if err != nil {
+		return err
+	}
+
+	return downloadAndExtractLibraryFromGitHub(release, destPath)
+}
+
+func downloadAndExtractLibraryFromReleases(version, checksumsURL, destPath string) error {
+	assetName := getPlatformAssetName()
+	project := getReleasesProject()
+	assetURL := buildReleaseURL(project, version, assetName)
 
 	// Create temporary files for download
-	tempDir := filepath.Join(os.TempDir(), "tokenizers-download")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
+	tempDir, err := os.MkdirTemp("", "tokenizers-download-*")
+	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() {
@@ -328,18 +482,55 @@ func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	}()
 
 	tempAsset := filepath.Join(tempDir, assetName)
+	tempChecksums := filepath.Join(tempDir, "SHA256SUMS")
 
-	// Download both files
+	// Download the archive
 	if err := downloadFile(assetURL, tempAsset); err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}
 
-	// Verify checksum
-	if assetChecksum != "" {
-		tempChecksum := strings.SplitAfter(assetChecksum, "sha256:")[1]
-		if err := verifyChecksum(tempAsset, tempChecksum); err != nil {
-			return fmt.Errorf("checksum verification failed: %w", err)
+	// Download and resolve checksums.
+	if err := downloadFile(checksumsURL, tempChecksums); err != nil {
+		return fmt.Errorf("failed to download checksums from %s: %w", checksumsURL, err)
+	}
+
+	checksumData, err := os.ReadFile(tempChecksums)
+	if err != nil {
+		return fmt.Errorf("failed to read checksums file: %w", err)
+	}
+
+	assetChecksum, err := checksumForAsset(string(checksumData), assetName)
+	if err != nil {
+		if !errors.Is(err, errChecksumAssetNotFound) {
+			return fmt.Errorf("failed to parse checksum manifest from %s: %w", checksumsURL, err)
 		}
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"warning: checksum entry for %s missing in SHA256SUMS from %s; falling back to per-asset .sha256\n",
+			assetName,
+			checksumsURL,
+		)
+
+		// Fallback to per-asset checksum files for compatibility.
+		perAssetChecksumURL := buildReleaseURL(project, version, assetName+".sha256")
+		tempPerAssetChecksum := filepath.Join(tempDir, assetName+".sha256")
+		if dlErr := downloadFile(perAssetChecksumURL, tempPerAssetChecksum); dlErr != nil {
+			return fmt.Errorf(
+				"failed to resolve checksum for %s from SHA256SUMS and fallback .sha256: %w (fallback error: %v)",
+				assetName,
+				err,
+				dlErr,
+			)
+		}
+		perAssetChecksumData, readErr := os.ReadFile(tempPerAssetChecksum)
+		if readErr != nil {
+			return fmt.Errorf("failed to read fallback checksum file: %w", readErr)
+		}
+		assetChecksum = string(perAssetChecksumData)
+	}
+
+	if err := verifyChecksum(tempAsset, assetChecksum); err != nil {
+		return fmt.Errorf("checksum verification failed: %w", err)
 	}
 
 	// Extract the library from the tar.gz file
@@ -350,6 +541,140 @@ func downloadAndExtractLibrary(release *GitHubRelease, destPath string) error {
 	return nil
 }
 
+func downloadAndExtractLibraryFromGitHub(release *gitHubRelease, destPath string) error {
+	if release == nil {
+		return fmt.Errorf("nil GitHub release payload")
+	}
+
+	assetName := getPlatformAssetName()
+	var assetURL string
+	var checksumsURL string
+	var perAssetChecksumURL string
+	for _, asset := range release.Assets {
+		switch asset.Name {
+		case assetName:
+			assetURL = asset.BrowserDownloadURL
+		case "SHA256SUMS":
+			checksumsURL = asset.BrowserDownloadURL
+		case assetName + ".sha256":
+			perAssetChecksumURL = asset.BrowserDownloadURL
+		}
+	}
+
+	if assetURL == "" {
+		return fmt.Errorf("asset %s not found in GitHub release %s", assetName, release.TagName)
+	}
+
+	tempDir, err := os.MkdirTemp("", "tokenizers-download-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
+
+	tempAsset := filepath.Join(tempDir, assetName)
+	if err := downloadFile(assetURL, tempAsset); err != nil {
+		return fmt.Errorf("failed to download asset from GitHub release %s: %w", release.TagName, err)
+	}
+
+	var assetChecksum string
+	if checksumsURL != "" {
+		tempChecksums := filepath.Join(tempDir, "SHA256SUMS")
+		if err := downloadFile(checksumsURL, tempChecksums); err != nil {
+			return fmt.Errorf("failed to download SHA256SUMS from GitHub release %s: %w", release.TagName, err)
+		}
+
+		checksumData, err := os.ReadFile(tempChecksums)
+		if err != nil {
+			return fmt.Errorf("failed to read GitHub SHA256SUMS: %w", err)
+		}
+
+		assetChecksum, err = checksumForAsset(string(checksumData), assetName)
+		if err != nil {
+			if !errors.Is(err, errChecksumAssetNotFound) {
+				return fmt.Errorf("failed to parse GitHub SHA256SUMS: %w", err)
+			}
+			_, _ = fmt.Fprintf(
+				os.Stderr,
+				"warning: checksum entry for %s missing in GitHub SHA256SUMS for release %s; falling back to per-asset .sha256\n",
+				assetName,
+				release.TagName,
+			)
+		}
+	}
+
+	if assetChecksum == "" {
+		if perAssetChecksumURL == "" {
+			return fmt.Errorf("no checksum asset found for %s in GitHub release %s", assetName, release.TagName)
+		}
+		tempPerAssetChecksum := filepath.Join(tempDir, assetName+".sha256")
+		if err := downloadFile(perAssetChecksumURL, tempPerAssetChecksum); err != nil {
+			return fmt.Errorf("failed to download per-asset checksum from GitHub release %s: %w", release.TagName, err)
+		}
+		perAssetChecksumData, err := os.ReadFile(tempPerAssetChecksum)
+		if err != nil {
+			return fmt.Errorf("failed to read per-asset checksum file: %w", err)
+		}
+		assetChecksum = string(perAssetChecksumData)
+	}
+
+	if err := verifyChecksum(tempAsset, assetChecksum); err != nil {
+		return fmt.Errorf("checksum verification failed for GitHub release %s: %w", release.TagName, err)
+	}
+	if err := extractLibrary(tempAsset, destPath); err != nil {
+		return fmt.Errorf("failed to extract library from GitHub release %s: %w", release.TagName, err)
+	}
+	return nil
+}
+
+func checksumForAsset(checksums, assetName string) (string, error) {
+	hasEntries := false
+	lines := strings.Split(checksums, "\n")
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			return "", fmt.Errorf("%w: line %d has invalid format", errChecksumManifestInvalid, i+1)
+		}
+
+		sum := parts[0]
+		if !looksLikeSHA256(sum) {
+			return "", fmt.Errorf("%w: line %d has invalid sha256 %q", errChecksumManifestInvalid, i+1, sum)
+		}
+
+		hasEntries = true
+		candidate := strings.TrimPrefix(parts[len(parts)-1], "*")
+		if filepath.Base(candidate) == assetName {
+			return sum, nil
+		}
+	}
+	if !hasEntries {
+		return "", fmt.Errorf("%w: checksum manifest is empty", errChecksumManifestInvalid)
+	}
+	return "", fmt.Errorf("%w: %s", errChecksumAssetNotFound, assetName)
+}
+
+func looksLikeSHA256(v string) bool {
+	if len(v) != 64 {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // DownloadAndCacheLibrary downloads and caches the library for the current platform
 func DownloadAndCacheLibrary() error {
 	cacheDir := getCacheDir()
@@ -358,14 +683,45 @@ func DownloadAndCacheLibrary() error {
 	// Check if already cached and valid
 	if isLibraryValid(cachedPath) {
 		// Verify ABI compatibility of cached library
-		if err := verifyLibraryABICompatibility(cachedPath); err == nil {
+		err := verifyLibraryABICompatibility(cachedPath)
+		if err == nil {
 			return nil
 		}
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"warning: cached library at %s failed ABI compatibility check (%v); clearing cache and re-downloading\n",
+			cachedPath,
+			err,
+		)
 		// If ABI check fails, clear cache and re-download
-		_ = ClearLibraryCache()
+		if clearErr := ClearLibraryCache(); clearErr != nil {
+			_, _ = fmt.Fprintf(
+				os.Stderr,
+				"warning: failed to clear cached library %s (%v); continuing with re-download attempt\n",
+				cachedPath,
+				clearErr,
+			)
+		}
 	}
 
-	return DownloadLibraryFromGitHub(cachedPath)
+	if err := DownloadLibraryFromGitHub(cachedPath); err != nil {
+		return err
+	}
+
+	// Ensure a freshly downloaded library is ABI/symbol compatible.
+	if err := verifyLibraryABICompatibility(cachedPath); err != nil {
+		if clearErr := ClearLibraryCache(); clearErr != nil {
+			_, _ = fmt.Fprintf(
+				os.Stderr,
+				"warning: failed to clear incompatible downloaded library %s (%v)\n",
+				cachedPath,
+				clearErr,
+			)
+		}
+		return fmt.Errorf("downloaded library at %s failed ABI compatibility check: %w", cachedPath, err)
+	}
+
+	return nil
 }
 
 // DownloadAndCacheLibraryWithVersion downloads and caches a specific version of the library
@@ -382,8 +738,6 @@ func GetCachedLibraryPath() string {
 	return filepath.Join(cacheDir, getLibraryName())
 }
 
-const apiVer = "2022-11-28"
-
 // ClearLibraryCache removes the cached library file
 func ClearLibraryCache() error {
 	cachedPath := GetCachedLibraryPath()
@@ -393,53 +747,35 @@ func ClearLibraryCache() error {
 	return os.Remove(cachedPath)
 }
 
-// GetAvailableVersions fetches available versions from GitHub releases
+// GetAvailableVersions fetches available versions from the primary releases endpoint,
+// and falls back to GitHub releases when needed.
+// The current endpoint contract exposes latest.json, so this returns a single latest version.
 func GetAvailableVersions() ([]string, error) {
-	repo := getGitHubRepo()
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
+	warnIfIgnoredLegacyRepoEnvSet()
 
-	client := &http.Client{Timeout: DownloadTimeout}
-	req, _ := http.NewRequest("GET",
-		url, nil)
-
-	// Headers required/recommended by GitHub
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", apiVer)
-	req.Header.Set("User-Agent", "pure-tokenizers-downloader")
-
-	// Auth if available (GITHUB_TOKEN or GH_TOKEN)
-	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	} else if tok := os.Getenv("GH_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch releases: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API request failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
-	}
-
-	var releases []GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("failed to decode releases JSON: %w", err)
-	}
-
-	// Filter for rust library releases only (rust-v* tags)
-	var versions []string
-	for _, release := range releases {
-		if strings.HasPrefix(release.TagName, "rust-v") {
-			versions = append(versions, release.TagName)
+	idx, err := fetchLatestReleaseIndex()
+	if err == nil {
+		version := normalizeReleaseVersion(idx.Version)
+		if version == DefaultTag {
+			return nil, fmt.Errorf("latest release metadata contains invalid version %q", idx.Version)
 		}
+		return []string{version}, nil
 	}
 
-	return versions, nil
+	release, fallbackErr := fetchLatestGitHubRustRelease()
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("failed to fetch latest versions from releases endpoint (%v) and GitHub fallback (%w)", err, fallbackErr)
+	}
+
+	warnVersionsFallbackOnce.Do(func() {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"warning: versions endpoint unavailable, falling back to GitHub Releases (%v)\n",
+			err,
+		)
+	})
+
+	return []string{release.TagName}, nil
 }
 
 // IsLibraryCached checks if the library is already cached and valid
@@ -449,35 +785,86 @@ func IsLibraryCached() bool {
 }
 
 // verifyLibraryABICompatibility checks if a library file is ABI compatible with the current Go bindings
-func verifyLibraryABICompatibility(libraryPath string) error {
-	// This is a simplified check - in production, you'd want to actually load
-	// the library and check the ABI version
-	// For now, we'll just verify the library can be loaded
+func verifyLibraryABICompatibility(libraryPath string) (err error) {
 	if !isLibraryValid(libraryPath) {
 		return fmt.Errorf("library at %s is not valid", libraryPath)
 	}
+
+	libh, err := loadLibrary(libraryPath)
+	if err != nil {
+		return fmt.Errorf("failed to load library for ABI compatibility check: %w", err)
+	}
+	defer func() {
+		if closeErr := closeLibrary(libh); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close library after ABI check: %w", closeErr)
+		}
+	}()
+
+	requiredSymbols := []string{
+		"from_file",
+		"from_bytes",
+		"encode",
+		"encode_batch_pairs",
+		"free_buffer",
+		"free_tokenizer",
+		"free_string",
+		"decode",
+		"vocab_size",
+		"get_version",
+	}
+
+	for _, symbol := range requiredSymbols {
+		if symbolErr := symbolExists(libh, symbol); symbolErr != nil {
+			return fmt.Errorf("library is missing required symbol %q: %w", symbol, symbolErr)
+		}
+	}
+
+	var getVersion func() string
+	purego.RegisterLibFunc(&getVersion, libh, "get_version")
+
+	versionStr := strings.TrimSpace(getVersion())
+	if versionStr == "" {
+		return fmt.Errorf("library returned empty version from get_version")
+	}
+
+	constraint, constraintErr := semver.NewConstraint(AbiCompatibilityConstraint)
+	if constraintErr != nil {
+		return fmt.Errorf("failed to parse ABI compatibility constraint %q: %w", AbiCompatibilityConstraint, constraintErr)
+	}
+
+	ver, versionErr := semver.NewVersion(versionStr)
+	if versionErr != nil {
+		return fmt.Errorf("invalid library version %q from get_version: %w", versionStr, versionErr)
+	}
+	if !constraint.Check(ver) {
+		return fmt.Errorf(
+			"library ABI version %s is not compatible with required constraint %s",
+			versionStr,
+			constraint.String(),
+		)
+	}
+
 	return nil
 }
 
 // GetLibraryInfo returns information about the current library setup
-func GetLibraryInfo() map[string]interface{} {
-	info := make(map[string]interface{})
+func GetLibraryInfo() map[string]any {
+	info := make(map[string]any)
 
 	info["platform_asset_name"] = getPlatformAssetName()
 	info["library_name"] = getLibraryName()
 	info["cache_path"] = GetCachedLibraryPath()
 	info["cache_dir"] = getCacheDir()
 	info["is_cached"] = IsLibraryCached()
-	info["github_repo"] = getGitHubRepo()
+	info["releases_base_url"] = ReleasesBaseURL
+	info["releases_project"] = ReleasesProject
+	info["github_repo"] = GitHubRepo
 	info["version"] = getVersionTag()
 
 	// Check environment variables
 	env := make(map[string]string)
 	if path := os.Getenv("TOKENIZERS_LIB_PATH"); path != "" {
 		env["TOKENIZERS_LIB_PATH"] = path
-	}
-	if repo := os.Getenv("TOKENIZERS_GITHUB_REPO"); repo != "" {
-		env["TOKENIZERS_GITHUB_REPO"] = repo
 	}
 	if version := os.Getenv("TOKENIZERS_VERSION"); version != "" {
 		env["TOKENIZERS_VERSION"] = version

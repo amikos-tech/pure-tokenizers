@@ -29,8 +29,7 @@ func main() {
 
 	// Example 3: Create tokenizer with automatic download
 	fmt.Println("\nCreating tokenizer with automatic download...")
-	tokenizer, err := tokenizers.FromFile("tokenizer.json",
-		tokenizers.WithDownloadLibrary())
+	tokenizer, err := tokenizers.FromFile("tokenizer.json")
 	if err != nil {
 		log.Printf("Failed to create tokenizer: %v", err)
 		fmt.Println("Note: This requires a valid tokenizer.json file and available releases")

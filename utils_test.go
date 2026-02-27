@@ -109,7 +109,7 @@ func TestLoadTokenizerLibrary(t *testing.T) {
 		require.NoError(t, err)
 		_, err = LoadTokenizerLibrary(fakeLibPath)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to load library from user-provided path")
+		require.Contains(t, err.Error(), "library at user-provided path is ABI/symbol incompatible")
 	})
 
 	t.Run("Invalid env var library path", func(t *testing.T) {

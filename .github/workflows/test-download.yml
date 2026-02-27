@@ -36,16 +36,10 @@ jobs:
     - name: Test automatic download
       env:
         TOKENIZERS_VERSION: ${{ github.event.inputs.test_version || 'latest' }}
+        TOKENIZERS_REQUIRE_ONLINE_TESTS: "1"
       run: |
-        go test -v -run "TestDownloadFunctionality" -timeout=10m
+        go test -v -run "TestDownloadLibraryFromGitHub|TestDownloadFunctionality/GetAvailableVersions" -timeout=10m
 
     - name: Test library info
       run: |
         go test -v -run "TestGetLibraryInfo"
-
-    - name: Test with environment variable override
-      env:
-        TOKENIZERS_GITHUB_REPO: ${{ github.repository }}
-        TOKENIZERS_VERSION: ${{ github.event.inputs.test_version || 'latest' }}
-      run: |
-        go test -v -run "TestDownloadFunctionality/GetAvailableVersions" -timeout=5m
