@@ -44,7 +44,7 @@ jobs:
       uses: ./.github/actions/setup-rust
 
     - name: Build Rust library
-      run: cargo build --release
+      run: cargo build --release --locked
 
     - name: Run benchmarks
       run: |
@@ -95,7 +95,7 @@ jobs:
       run: go install golang.org/x/perf/cmd/benchstat@latest
 
     - name: Build Rust library
-      run: cargo build --release
+      run: cargo build --release --locked
 
     - name: Run benchmarks on PR branch
       run: |
@@ -110,7 +110,7 @@ jobs:
 
     - name: Build base branch
       working-directory: base
-      run: cargo build --release
+      run: cargo build --release --locked
 
     - name: Run benchmarks on base branch
       working-directory: base
