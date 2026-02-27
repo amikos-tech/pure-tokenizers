@@ -800,7 +800,24 @@ func DownloadAndCacheLibraryWithVersion(version string) error {
 	cacheDir := getCacheDir()
 	cachedPath := filepath.Join(cacheDir, getLibraryName())
 
-	return DownloadLibraryFromGitHubWithVersion(cachedPath, version)
+	if err := DownloadLibraryFromGitHubWithVersion(cachedPath, version); err != nil {
+		return err
+	}
+
+	// Ensure a freshly downloaded versioned library is ABI/symbol compatible.
+	if err := verifyLibraryABICompatibility(cachedPath); err != nil {
+		if clearErr := ClearLibraryCache(); clearErr != nil {
+			_, _ = fmt.Fprintf(
+				os.Stderr,
+				"warning: failed to clear incompatible downloaded library %s (%v)\n",
+				cachedPath,
+				clearErr,
+			)
+		}
+		return fmt.Errorf("downloaded library at %s failed ABI compatibility check: %w", cachedPath, err)
+	}
+
+	return nil
 }
 
 // GetCachedLibraryPath returns the path where the library would be cached
