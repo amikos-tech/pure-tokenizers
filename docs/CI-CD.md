@@ -25,11 +25,11 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 - Go linting with golangci-lint
 - Caching for faster builds
 
-### 2. Build and Release Workflow (`.github/workflows/build-and-release.yml`)
+### 2. Rust Release Workflow (`.github/workflows/rust-release.yml`)
 
-**Triggers:** Git tags starting with 'v', Pull Requests, Manual dispatch
+**Triggers:** Rust release tags (`rust-v*`)
 
-**Purpose:** Build libraries for all supported platforms and create releases
+**Purpose:** Build native library artifacts for all supported platforms and publish them to the releases endpoint
 
 **Supported Platforms:**
 - Linux: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
@@ -37,25 +37,24 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 - Windows: `x86_64-pc-windows-msvc`
 
 **Jobs:**
-- **build**: Cross-compiles for all target platforms
-- **test**: Tests Go bindings with built libraries
-- **release**: Creates GitHub releases with all platform assets
+- **build**: Cross-compiles for all target platforms and uploads platform-specific `libtokenizers-*.tar.gz` artifacts
+- **release**: Generates `SHA256SUMS` and per-asset checksums, signs/verifies artifacts, then publishes to the releases endpoint
 
 **Artifacts:**
 - Platform-specific tar.gz archives containing the shared libraries
 - SHA256 checksum files for each archive
 - Automatic GitHub release creation for tagged versions
 
-### 3. Cross Compilation Test (`.github/workflows/cross-compile.yml`)
+### 3. Go Release Workflow (`.github/workflows/go-release.yml`)
 
-**Triggers:** Changes to Rust source code or build configuration
+**Triggers:** Go release tags (`v*`)
 
-**Purpose:** Verify cross-compilation works for all targets
+**Purpose:** Validate Go module release flow against published Rust artifacts and publish Go module release metadata
 
 **Features:**
-- Tests compilation for all supported targets
-- Includes additional targets like musl variants
-- Verifies library files are created correctly
+- Tests downloads against released native artifacts
+- Verifies Go bindings against released libraries
+- Publishes Go release output
 
 ### 4. Download Functionality Test (`.github/workflows/test-download.yml`)
 
@@ -121,7 +120,7 @@ This installs:
 
 # Or step by step
 make build
-make test-v2
+make test
 
 # Test specific functionality
 make test-download
@@ -157,7 +156,6 @@ Examples:
 
 ### User Environment Variables
 
-- `TOKENIZERS_GITHUB_REPO`: Override GitHub repository for downloads
 - `TOKENIZERS_VERSION`: Specify version to download
 - `TOKENIZERS_LIB_PATH`: Override library path
 

@@ -108,8 +108,8 @@ jobs:
 
           ### Environment Variables
           - `TOKENIZERS_LIB_PATH`: Override library path
-          - `TOKENIZERS_GITHUB_REPO`: Custom GitHub repository
           - `TOKENIZERS_VERSION`: Specific Rust library version to use
+          - `GITHUB_TOKEN` / `GH_TOKEN`: Optional GitHub API auth for fallback requests
 
           ### Documentation
           See the [README](https://github.com/${{ github.repository }}) for detailed usage instructions.

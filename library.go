@@ -41,3 +41,8 @@ func closeLibrary(handle uintptr) error {
 	}
 	return nil
 }
+
+func symbolExists(handle uintptr, name string) error {
+	_, err := purego.Dlsym(handle, name)
+	return err
+}

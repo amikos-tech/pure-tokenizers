@@ -18,7 +18,7 @@ This guide covers the deployment and release process for the CGo-free Tokenizers
 
 3. **Monitor the build:**
    - Go to GitHub Actions tab
-   - Watch the "Build and Release" workflow
+   - Watch the `rust-release.yml` and `go-release.yml` workflows
    - Release will be created automatically when complete
 
 ## Supported Platforms
@@ -31,13 +31,14 @@ The CI system builds for the following platforms:
 | Linux | ARM64 | `aarch64-unknown-linux-gnu` | `libtokenizers.so` |
 | macOS | Intel | `x86_64-apple-darwin` | `libtokenizers.dylib` |
 | macOS | Apple Silicon | `aarch64-apple-darwin` | `libtokenizers.dylib` |
-| Windows | x86_64 | `x86_64-pc-windows-msvc` | `libtokenizers.dll` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` | `tokenizers.dll` |
 
 ## Release Assets
 
 Each release includes:
 
 - **Platform-specific archives**: `libtokenizers-{arch}-{platform}.tar.gz`
+- **Manifest checksum file**: `SHA256SUMS` (primary verification source)
 - **Checksum files**: `libtokenizers-{arch}-{platform}.tar.gz.sha256`
 - **Automatic release notes**: Generated from commits and PRs
 
@@ -47,20 +48,20 @@ The Go library automatically downloads the appropriate platform library:
 
 ```go
 // Automatic download
-tokenizer, err := tokenizers.FromFile("config.json", 
-    tokenizers.WithDownloadLibrary())
+tokenizer, err := tokenizers.FromFile("config.json")
 
 // Manual path
 tokenizer, err := tokenizers.FromFile("config.json", 
     tokenizers.WithLibraryPath("/path/to/lib"))
 ```
 
+Downloads are attempted from `releases.amikos.tech` first and fall back to GitHub Releases if needed.
+
 ## Environment Variables
 
 ### For Users
 
 - `TOKENIZERS_LIB_PATH`: Override library path
-- `TOKENIZERS_GITHUB_REPO`: Custom repository for downloads
 - `TOKENIZERS_VERSION`: Specific version to download
 
 ### For CI/CD
@@ -97,7 +98,7 @@ make create-release-assets
 
 ```bash
 # Run all tests
-make test-v2
+make test
 
 # Test download functionality
 make test-download
@@ -113,15 +114,15 @@ make test-rust
 - **Purpose**: Basic testing and validation
 - **Platforms**: Linux, macOS, Windows
 
-### 2. Build and Release (`build-and-release.yml`)
-- **Trigger**: Git tags (`v*`)
-- **Purpose**: Create releases with all platform assets
-- **Features**: Cross-compilation, checksum generation, automatic releases
+### 2. Rust Release (`rust-release.yml`)
+- **Trigger**: Rust tags (`rust-v*`)
+- **Purpose**: Build and publish platform assets to releases endpoint
+- **Features**: Cross-compilation, `SHA256SUMS` + per-asset checksums, artifact publishing
 
-### 3. Cross Compilation Test (`cross-compile.yml`)
-- **Trigger**: Changes to Rust code
-- **Purpose**: Verify cross-compilation works
-- **Targets**: All supported platforms + additional variants
+### 3. Go Release (`go-release.yml`)
+- **Trigger**: Go tags (`v*`)
+- **Purpose**: Validate and publish Go module releases
+- **Features**: Tests against released Rust artifacts and publishes module release
 
 ### 4. Download Test (`test-download.yml`)
 - **Trigger**: Weekly schedule, manual dispatch

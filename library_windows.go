@@ -40,3 +40,8 @@ func closeLibrary(handle uintptr) error {
 	}
 	return nil
 }
+
+func symbolExists(handle uintptr, name string) error {
+	_, err := windows.GetProcAddress(windows.Handle(handle), name)
+	return err
+}

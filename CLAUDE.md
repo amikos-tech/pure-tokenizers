@@ -109,7 +109,7 @@ The system follows a priority order for loading the tokenizer library:
 1. User-provided path via `WithLibraryPath()` option
 2. `TOKENIZERS_LIB_PATH` environment variable
 3. Cached library in platform-specific directory
-4. Automatic download from GitHub releases to cache
+4. Automatic download from `releases.amikos.tech` (with GitHub Releases fallback) to cache
 
 ### Version Management
 The project uses a single version from `Cargo.toml` for both the library and ABI compatibility:
@@ -139,7 +139,8 @@ The project uses a single version from `Cargo.toml` for both the library and ABI
 
 **Download System (download.go)**
 - Automatic platform detection and asset selection
-- GitHub releases integration with checksum verification
+- Primary `releases.amikos.tech` endpoint with GitHub Releases fallback
+- Checksum verification for all downloaded assets
 - Intelligent caching in OS-appropriate directories
 
 **Rust Layer (src/lib.rs)**
@@ -171,9 +172,8 @@ For detailed cache structure and management, see `docs/CACHE_MANAGEMENT.md`.
 ## Environment Variables
 
 - `TOKENIZERS_LIB_PATH`: Override library path
-- `TOKENIZERS_GITHUB_REPO`: Custom GitHub repository (default: `amikos-tech/pure-tokenizers`)
 - `TOKENIZERS_VERSION`: Specific version to download (default: `latest`)
-- `GITHUB_TOKEN` or `GH_TOKEN`: GitHub authentication for API requests
+- `GITHUB_TOKEN` or `GH_TOKEN`: Optional GitHub authentication for fallback API requests
 - `HF_TOKEN`: HuggingFace authentication token for private/gated models
 - `HF_HUB_CACHE`: Override HuggingFace cache directory
 - `HF_MAX_TOKENIZER_SIZE`: Maximum tokenizer file size in bytes (default: 524288000 / 500MB)

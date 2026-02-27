@@ -14,16 +14,25 @@ import (
 // 1. User-provided path
 // 2. TOKENIZERS_LIB_PATH environment variable
 // 3. Cached library in platform-specific directory
-// 4. Automatic download from GitHub releases
+// 4. Automatic download from releases.amikos.tech (with GitHub Releases fallback)
 func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 1: User-provided path
 	if userPath != "" {
 		if _, err := os.Stat(userPath); err == nil {
 			libh, err := loadLibrary(userPath)
-			if err == nil {
-				return libh, nil
+			if err != nil {
+				return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
 			}
-			return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
+			if !isLibraryABIVerified(userPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+					}
+					return 0, errors.Wrapf(err, "library at user-provided path is ABI/symbol incompatible: %s", userPath)
+				}
+				markLibraryABIVerified(userPath)
+			}
+			return libh, nil
 		}
 		return 0, errors.Errorf("library file not found at user-provided path: %s", userPath)
 	}
@@ -32,34 +41,104 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	if envPath := os.Getenv("TOKENIZERS_LIB_PATH"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
 			libh, err := loadLibrary(envPath)
-			if err == nil {
-				return libh, nil
+			if err != nil {
+				return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)
 			}
-			return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)
+			if !isLibraryABIVerified(envPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+					}
+					return 0, errors.Wrapf(err, "library at TOKENIZERS_LIB_PATH is ABI/symbol incompatible: %s", envPath)
+				}
+				markLibraryABIVerified(envPath)
+			}
+			return libh, nil
 		}
 		return 0, errors.Errorf("library file not found at TOKENIZERS_LIB_PATH: %s", envPath)
 	}
 
 	// Priority 3: Cached library
 	cachedPath := GetCachedLibraryPath()
-	if isLibraryValid(cachedPath) {
+	var cachedLoadErr error
+	if _, statErr := os.Stat(cachedPath); statErr == nil {
+		shouldClearCache := false
+
 		libh, err := loadLibrary(cachedPath)
-		if err == nil {
-			return libh, nil
+		if err != nil {
+			cachedLoadErr = errors.Wrapf(err, "failed to load cached library from %s", cachedPath)
+			shouldClearCache = true
+		} else {
+			if !isLibraryABIVerified(cachedPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close cached library handle: %v", err, closeErr)
+					}
+					cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
+					shouldClearCache = true
+				} else {
+					markLibraryABIVerified(cachedPath)
+				}
+			}
+			if cachedLoadErr == nil {
+				return libh, nil
+			}
 		}
-		// If cached library fails to load, try to re-download
-		_ = ClearLibraryCache()
+
+		// If cached library fails compatibility or load, clear cache once and re-download.
+		if shouldClearCache {
+			if clearErr := ClearLibraryCache(); clearErr != nil {
+				_, _ = fmt.Fprintf(
+					os.Stderr,
+					"warning: failed to clear cached library %s (%v); continuing with re-download attempt\n",
+					cachedPath,
+					clearErr,
+				)
+			}
+		}
 	}
 
-	// Priority 4: Download from GitHub
-	if err := DownloadAndCacheLibrary(); err != nil {
-		return 0, errors.Wrap(err, "failed to download library from GitHub releases")
+	// Priority 4: Download from releases endpoint (with GitHub fallback)
+	if err := DownloadLibraryFromGitHub(cachedPath); err != nil {
+		if cachedLoadErr != nil {
+			return 0, errors.Wrapf(err, "failed to download library after cached load error: %v", cachedLoadErr)
+		}
+		return 0, errors.Wrap(err, "failed to download library from release endpoint")
 	}
 
 	// Try loading the newly downloaded library
 	libh, err := loadLibrary(cachedPath)
 	if err != nil {
+		if cachedLoadErr != nil {
+			return 0, errors.Wrapf(err, "failed to load downloaded library from %s (previous cached load error: %v)", cachedPath, cachedLoadErr)
+		}
 		return 0, errors.Wrapf(err, "failed to load downloaded library from: %s", cachedPath)
+	}
+
+	if !isLibraryABIVerified(cachedPath) {
+		if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+			if closeErr := closeLibrary(libh); closeErr != nil {
+				err = fmt.Errorf("%w; additionally failed to close downloaded library handle: %v", err, closeErr)
+			}
+			if clearErr := ClearLibraryCache(); clearErr != nil {
+				_, _ = fmt.Fprintf(
+					os.Stderr,
+					"warning: failed to clear incompatible downloaded library %s (%v)\n",
+					cachedPath,
+					clearErr,
+				)
+			}
+			if cachedLoadErr != nil {
+				return 0, errors.Wrapf(
+					err,
+					"downloaded library from %s failed ABI/symbol compatibility check (previous cached load error: %v)",
+					cachedPath,
+					cachedLoadErr,
+				)
+			}
+			return 0, errors.Wrapf(err, "downloaded library from %s failed ABI/symbol compatibility check", cachedPath)
+		}
+		markLibraryABIVerified(cachedPath)
 	}
 
 	return libh, nil
