@@ -95,6 +95,7 @@ func TestNormalizeReleaseVersion(t *testing.T) {
 		{name: "v prefix", input: "v0.1.3", expected: "rust-v0.1.3"},
 		{name: "raw semver", input: "0.1.3", expected: "rust-v0.1.3"},
 		{name: "legacy rust tag", input: "rust-0.1.3", expected: "rust-v0.1.3"},
+		{name: "bare rust prefix", input: "rust-", expected: "latest"},
 		{name: "non semver rust prefix", input: "rust-nightly", expected: "rust-nightly"},
 	}
 
@@ -192,6 +193,12 @@ func TestResolveChecksumsURL(t *testing.T) {
 	t.Run("absolute https checksums url rejected for unknown host", func(t *testing.T) {
 		_, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://cdn.example.com/SHA256SUMS"})
 		require.Error(t, err)
+	})
+
+	t.Run("empty checksums url falls back to default manifest path", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: ""})
+		require.NoError(t, err)
+		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
 	})
 }
 

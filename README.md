@@ -290,6 +290,11 @@ err := tokenizers.ClearLibraryCache()
 
 // Download and cache a specific version
 err := tokenizers.DownloadAndCacheLibraryWithVersion("v0.1.0")
+
+// Discover release versions
+versions, err := tokenizers.GetAvailableVersions()
+// Note: current release metadata exposes only latest.json,
+// so this returns at most one latest version.
 ```
 
 #### HuggingFace Cache

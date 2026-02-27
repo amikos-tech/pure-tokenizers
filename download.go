@@ -39,6 +39,8 @@ var (
 	warnDownloadFallbackOnce   sync.Once
 	warnVersionsFallbackOnce   sync.Once
 	warnIgnoredLegacyRepoEnv   sync.Once
+	libraryABIVerifiedMu       sync.RWMutex
+	libraryABIVerifiedByPath   = make(map[string]string)
 	errChecksumAssetNotFound   = errors.New("checksum for asset not found")
 	errChecksumManifestInvalid = errors.New("invalid checksum manifest")
 )
@@ -306,7 +308,7 @@ func normalizeReleaseVersion(version string) string {
 	case strings.HasPrefix(v, "rust-"):
 		suffix := strings.TrimPrefix(v, "rust-")
 		if suffix == "" {
-			return v
+			return DefaultTag
 		}
 		if suffix[0] >= '0' && suffix[0] <= '9' {
 			return "rust-v" + suffix
@@ -345,7 +347,7 @@ func fetchGitHubReleaseByTag(tag string) (*gitHubRelease, error) {
 }
 
 func fetchLatestGitHubRustRelease() (*gitHubRelease, error) {
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases", GitHubRepo)
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=100", GitHubRepo)
 
 	var releases []gitHubRelease
 	if err := downloadJSON(endpoint, &releases); err != nil {
@@ -381,6 +383,43 @@ func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
 		}
 	}
 	return buildReleaseURL(ReleasesProject, version, "SHA256SUMS"), nil
+}
+
+func libraryABIFingerprint(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano()), nil
+}
+
+func isLibraryABIVerified(path string) bool {
+	fingerprint, err := libraryABIFingerprint(path)
+	if err != nil {
+		return false
+	}
+
+	libraryABIVerifiedMu.RLock()
+	cached, ok := libraryABIVerifiedByPath[path]
+	libraryABIVerifiedMu.RUnlock()
+	return ok && cached == fingerprint
+}
+
+func markLibraryABIVerified(path string) {
+	fingerprint, err := libraryABIFingerprint(path)
+	if err != nil {
+		return
+	}
+
+	libraryABIVerifiedMu.Lock()
+	libraryABIVerifiedByPath[path] = fingerprint
+	libraryABIVerifiedMu.Unlock()
+}
+
+func clearLibraryABIVerified(path string) {
+	libraryABIVerifiedMu.Lock()
+	delete(libraryABIVerifiedByPath, path)
+	libraryABIVerifiedMu.Unlock()
 }
 
 // getVersionTag returns the version tag to download
@@ -749,6 +788,7 @@ func GetCachedLibraryPath() string {
 // ClearLibraryCache removes the cached library file
 func ClearLibraryCache() error {
 	cachedPath := GetCachedLibraryPath()
+	clearLibraryABIVerified(cachedPath)
 	if _, err := os.Stat(cachedPath); os.IsNotExist(err) {
 		return nil // Already doesn't exist
 	}
@@ -795,6 +835,10 @@ func IsLibraryCached() bool {
 
 // verifyLibraryABICompatibility checks if a library file is ABI compatible with the current Go bindings
 func verifyLibraryABICompatibility(libraryPath string) (err error) {
+	if isLibraryABIVerified(libraryPath) {
+		return nil
+	}
+
 	libh, err := loadLibrary(libraryPath)
 	if err != nil {
 		return fmt.Errorf("failed to load library for ABI compatibility check: %w", err)
@@ -805,7 +849,11 @@ func verifyLibraryABICompatibility(libraryPath string) (err error) {
 		}
 	}()
 
-	return verifyLibraryABICompatibilityHandle(libh)
+	if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+		return err
+	}
+	markLibraryABIVerified(libraryPath)
+	return nil
 }
 
 func verifyLibraryABICompatibilityHandle(libh uintptr) error {

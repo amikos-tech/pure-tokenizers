@@ -23,11 +23,14 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 			if err != nil {
 				return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
 			}
-			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
-				if closeErr := closeLibrary(libh); closeErr != nil {
-					err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+			if !isLibraryABIVerified(userPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+					}
+					return 0, errors.Wrapf(err, "library at user-provided path is ABI/symbol incompatible: %s", userPath)
 				}
-				return 0, errors.Wrapf(err, "library at user-provided path is ABI/symbol incompatible: %s", userPath)
+				markLibraryABIVerified(userPath)
 			}
 			return libh, nil
 		}
@@ -41,11 +44,14 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 			if err != nil {
 				return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)
 			}
-			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
-				if closeErr := closeLibrary(libh); closeErr != nil {
-					err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+			if !isLibraryABIVerified(envPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+					}
+					return 0, errors.Wrapf(err, "library at TOKENIZERS_LIB_PATH is ABI/symbol incompatible: %s", envPath)
 				}
-				return 0, errors.Wrapf(err, "library at TOKENIZERS_LIB_PATH is ABI/symbol incompatible: %s", envPath)
+				markLibraryABIVerified(envPath)
 			}
 			return libh, nil
 		}
@@ -63,13 +69,18 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 			cachedLoadErr = errors.Wrapf(err, "failed to load cached library from %s", cachedPath)
 			shouldClearCache = true
 		} else {
-			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
-				if closeErr := closeLibrary(libh); closeErr != nil {
-					err = fmt.Errorf("%w; additionally failed to close cached library handle: %v", err, closeErr)
+			if !isLibraryABIVerified(cachedPath) {
+				if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+					if closeErr := closeLibrary(libh); closeErr != nil {
+						err = fmt.Errorf("%w; additionally failed to close cached library handle: %v", err, closeErr)
+					}
+					cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
+					shouldClearCache = true
+				} else {
+					markLibraryABIVerified(cachedPath)
 				}
-				cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
-				shouldClearCache = true
-			} else {
+			}
+			if cachedLoadErr == nil {
 				return libh, nil
 			}
 		}
