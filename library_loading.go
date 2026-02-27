@@ -19,14 +19,17 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 1: User-provided path
 	if userPath != "" {
 		if _, err := os.Stat(userPath); err == nil {
-			if err := verifyLibraryABICompatibility(userPath); err != nil {
+			libh, err := loadLibrary(userPath)
+			if err != nil {
+				return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
+			}
+			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+				if closeErr := closeLibrary(libh); closeErr != nil {
+					err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+				}
 				return 0, errors.Wrapf(err, "library at user-provided path is ABI/symbol incompatible: %s", userPath)
 			}
-			libh, err := loadLibrary(userPath)
-			if err == nil {
-				return libh, nil
-			}
-			return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
+			return libh, nil
 		}
 		return 0, errors.Errorf("library file not found at user-provided path: %s", userPath)
 	}
@@ -34,14 +37,17 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 2: Environment variable
 	if envPath := os.Getenv("TOKENIZERS_LIB_PATH"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
-			if err := verifyLibraryABICompatibility(envPath); err != nil {
+			libh, err := loadLibrary(envPath)
+			if err != nil {
+				return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)
+			}
+			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+				if closeErr := closeLibrary(libh); closeErr != nil {
+					err = fmt.Errorf("%w; additionally failed to close library handle: %v", err, closeErr)
+				}
 				return 0, errors.Wrapf(err, "library at TOKENIZERS_LIB_PATH is ABI/symbol incompatible: %s", envPath)
 			}
-			libh, err := loadLibrary(envPath)
-			if err == nil {
-				return libh, nil
-			}
-			return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)
+			return libh, nil
 		}
 		return 0, errors.Errorf("library file not found at TOKENIZERS_LIB_PATH: %s", envPath)
 	}
@@ -49,21 +55,23 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 3: Cached library
 	cachedPath := GetCachedLibraryPath()
 	var cachedLoadErr error
-	if isLibraryValid(cachedPath) {
+	if _, statErr := os.Stat(cachedPath); statErr == nil {
 		shouldClearCache := false
 
-		if err := verifyLibraryABICompatibility(cachedPath); err != nil {
-			cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
-			shouldClearCache = true
-		}
-
-		if cachedLoadErr == nil {
-			libh, err := loadLibrary(cachedPath)
-			if err == nil {
-				return libh, nil
-			}
+		libh, err := loadLibrary(cachedPath)
+		if err != nil {
 			cachedLoadErr = errors.Wrapf(err, "failed to load cached library from %s", cachedPath)
 			shouldClearCache = true
+		} else {
+			if err := verifyLibraryABICompatibilityHandle(libh); err != nil {
+				if closeErr := closeLibrary(libh); closeErr != nil {
+					err = fmt.Errorf("%w; additionally failed to close cached library handle: %v", err, closeErr)
+				}
+				cachedLoadErr = errors.Wrapf(err, "cached library failed ABI/symbol compatibility check: %s", cachedPath)
+				shouldClearCache = true
+			} else {
+				return libh, nil
+			}
 		}
 
 		// If cached library fails compatibility or load, clear cache once and re-download.

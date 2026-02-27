@@ -106,10 +106,6 @@ func TestNormalizeReleaseVersion(t *testing.T) {
 	}
 }
 
-func TestGetReleasesProject(t *testing.T) {
-	require.Equal(t, ReleasesProject, getReleasesProject())
-}
-
 func TestBuildReleaseURL(t *testing.T) {
 	require.Equal(
 		t,
@@ -176,14 +172,25 @@ func TestResolveChecksumsURL(t *testing.T) {
 		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
 	})
 
-	t.Run("absolute https checksums url", func(t *testing.T) {
-		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://cdn.example.com/SHA256SUMS"})
+	t.Run("absolute releases host checksums url", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS"})
 		require.NoError(t, err)
-		require.Equal(t, "https://cdn.example.com/SHA256SUMS", url)
+		require.Equal(t, "https://releases.amikos.tech/pure-tokenizers/rust-v0.1.0/SHA256SUMS", url)
+	})
+
+	t.Run("absolute github objects host checksums url", func(t *testing.T) {
+		url, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://objects.githubusercontent.com/github-production-release-asset-2e65be/SHA256SUMS"})
+		require.NoError(t, err)
+		require.Equal(t, "https://objects.githubusercontent.com/github-production-release-asset-2e65be/SHA256SUMS", url)
 	})
 
 	t.Run("absolute http checksums url rejected", func(t *testing.T) {
 		_, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "http://cdn.example.com/SHA256SUMS"})
+		require.Error(t, err)
+	})
+
+	t.Run("absolute https checksums url rejected for unknown host", func(t *testing.T) {
+		_, err := resolveChecksumsURL("rust-v0.1.0", &releaseIndex{ChecksumsURL: "https://cdn.example.com/SHA256SUMS"})
 		require.Error(t, err)
 	})
 }

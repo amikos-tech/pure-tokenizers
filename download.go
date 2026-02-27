@@ -262,21 +262,27 @@ type gitHubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-// getGitHubRepo returns the fixed GitHub fallback repository.
-func getGitHubRepo() string {
-	return GitHubRepo
-}
+func isAllowedChecksumsHost(host string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(host))
+	if normalized == "" {
+		return false
+	}
 
-func getReleasesBaseURL() string {
-	return ReleasesBaseURL
-}
+	releasesURL, err := url.Parse(ReleasesBaseURL)
+	if err == nil && normalized == strings.ToLower(releasesURL.Hostname()) {
+		return true
+	}
 
-func getReleasesProject() string {
-	return ReleasesProject
+	switch normalized {
+	case "objects.githubusercontent.com":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildReleaseURL(parts ...string) string {
-	base := getReleasesBaseURL()
+	base := ReleasesBaseURL
 	pathParts := make([]string, 0, len(parts))
 	for _, p := range parts {
 		part := strings.Trim(p, "/")
@@ -314,7 +320,7 @@ func normalizeReleaseVersion(version string) string {
 }
 
 func fetchLatestReleaseIndex() (*releaseIndex, error) {
-	url := buildReleaseURL(getReleasesProject(), "latest.json")
+	url := buildReleaseURL(ReleasesProject, "latest.json")
 	var idx releaseIndex
 	if err := downloadJSON(url, &idx); err != nil {
 		return nil, err
@@ -326,8 +332,7 @@ func fetchLatestReleaseIndex() (*releaseIndex, error) {
 }
 
 func fetchGitHubReleaseByTag(tag string) (*gitHubRelease, error) {
-	repo := getGitHubRepo()
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", repo, tag)
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", GitHubRepo, tag)
 
 	var release gitHubRelease
 	if err := downloadJSON(endpoint, &release); err != nil {
@@ -340,19 +345,19 @@ func fetchGitHubReleaseByTag(tag string) (*gitHubRelease, error) {
 }
 
 func fetchLatestGitHubRustRelease() (*gitHubRelease, error) {
-	repo := getGitHubRepo()
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases", GitHubRepo)
 
 	var releases []gitHubRelease
 	if err := downloadJSON(endpoint, &releases); err != nil {
 		return nil, fmt.Errorf("failed to fetch GitHub releases list: %w", err)
 	}
+	// GitHub returns releases newest-first, so the first rust-v* tag on page 1 is the latest.
 	for _, release := range releases {
 		if strings.HasPrefix(strings.TrimSpace(release.TagName), "rust-v") {
 			return &release, nil
 		}
 	}
-	return nil, fmt.Errorf("no rust-v* releases found in GitHub repository %s", repo)
+	return nil, fmt.Errorf("no rust-v* releases found in GitHub repository %s", GitHubRepo)
 }
 
 func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
@@ -367,12 +372,15 @@ func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
 				if !strings.EqualFold(parsed.Scheme, "https") {
 					return "", fmt.Errorf("invalid checksums_url scheme %q: only https is allowed", parsed.Scheme)
 				}
+				if !isAllowedChecksumsHost(parsed.Hostname()) {
+					return "", fmt.Errorf("invalid checksums_url host %q: host is not in the allowlist", parsed.Hostname())
+				}
 				return checksumsURL, nil
 			}
 			return buildReleaseURL(checksumsURL), nil
 		}
 	}
-	return buildReleaseURL(getReleasesProject(), version, "SHA256SUMS"), nil
+	return buildReleaseURL(ReleasesProject, version, "SHA256SUMS"), nil
 }
 
 // getVersionTag returns the version tag to download
@@ -469,7 +477,7 @@ func downloadFromGitHubWithVersion(destPath, version string) error {
 
 func downloadAndExtractLibraryFromReleases(version, checksumsURL, destPath string) error {
 	assetName := getPlatformAssetName()
-	project := getReleasesProject()
+	project := ReleasesProject
 	assetURL := buildReleaseURL(project, version, assetName)
 
 	// Create temporary files for download
@@ -681,7 +689,7 @@ func DownloadAndCacheLibrary() error {
 	cachedPath := filepath.Join(cacheDir, getLibraryName())
 
 	// Check if already cached and valid
-	if isLibraryValid(cachedPath) {
+	if _, statErr := os.Stat(cachedPath); statErr == nil {
 		// Verify ABI compatibility of cached library
 		err := verifyLibraryABICompatibility(cachedPath)
 		if err == nil {
@@ -749,7 +757,8 @@ func ClearLibraryCache() error {
 
 // GetAvailableVersions fetches available versions from the primary releases endpoint,
 // and falls back to GitHub releases when needed.
-// The current endpoint contract exposes latest.json, so this returns a single latest version.
+// The return type is kept for API compatibility, but current endpoint contracts expose only
+// latest.json, so this intentionally returns at most one latest version.
 func GetAvailableVersions() ([]string, error) {
 	warnIfIgnoredLegacyRepoEnvSet()
 
@@ -786,10 +795,6 @@ func IsLibraryCached() bool {
 
 // verifyLibraryABICompatibility checks if a library file is ABI compatible with the current Go bindings
 func verifyLibraryABICompatibility(libraryPath string) (err error) {
-	if !isLibraryValid(libraryPath) {
-		return fmt.Errorf("library at %s is not valid", libraryPath)
-	}
-
 	libh, err := loadLibrary(libraryPath)
 	if err != nil {
 		return fmt.Errorf("failed to load library for ABI compatibility check: %w", err)
@@ -800,6 +805,10 @@ func verifyLibraryABICompatibility(libraryPath string) (err error) {
 		}
 	}()
 
+	return verifyLibraryABICompatibilityHandle(libh)
+}
+
+func verifyLibraryABICompatibilityHandle(libh uintptr) error {
 	requiredSymbols := []string{
 		"from_file",
 		"from_bytes",
