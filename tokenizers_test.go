@@ -1,6 +1,8 @@
 package tokenizers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/url"
 	"os"
@@ -256,6 +258,29 @@ func TestChecksumForAsset(t *testing.T) {
 	})
 }
 
+func TestVerifyChecksum(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "artifact.tar.gz")
+	artifactData := []byte("tokenizers-test-artifact")
+	require.NoError(t, os.WriteFile(artifactPath, artifactData, 0644))
+
+	hash := sha256.Sum256(artifactData)
+	expected := hex.EncodeToString(hash[:])
+
+	t.Run("raw checksum value", func(t *testing.T) {
+		require.NoError(t, verifyChecksum(artifactPath, expected))
+	})
+
+	t.Run("checksum line with filename", func(t *testing.T) {
+		require.NoError(t, verifyChecksum(artifactPath, expected+"  artifact.tar.gz"))
+	})
+
+	t.Run("empty checksum rejected", func(t *testing.T) {
+		err := verifyChecksum(artifactPath, " \n\t")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "checksum data is empty")
+	})
+}
+
 func TestLooksLikeSHA256(t *testing.T) {
 	t.Run("valid lowercase hash", func(t *testing.T) {
 		require.True(t, looksLikeSHA256(strings.Repeat("a", 64)))
@@ -276,6 +301,27 @@ func TestLooksLikeSHA256(t *testing.T) {
 	t.Run("contains non-hex", func(t *testing.T) {
 		require.False(t, looksLikeSHA256(strings.Repeat("a", 63)+"g"))
 	})
+}
+
+func TestLibraryABIVerifiedCacheLifecycle(t *testing.T) {
+	libraryPath := filepath.Join(t.TempDir(), getLibraryName())
+
+	require.NoError(t, os.WriteFile(libraryPath, []byte("v1"), 0644))
+	clearLibraryABIVerified(libraryPath)
+	require.False(t, isLibraryABIVerified(libraryPath))
+
+	markLibraryABIVerified(libraryPath)
+	require.True(t, isLibraryABIVerified(libraryPath))
+
+	// Change file size to guarantee fingerprint changes across filesystems.
+	require.NoError(t, os.WriteFile(libraryPath, []byte("v2-with-different-size"), 0644))
+	require.False(t, isLibraryABIVerified(libraryPath))
+
+	markLibraryABIVerified(libraryPath)
+	require.True(t, isLibraryABIVerified(libraryPath))
+
+	clearLibraryABIVerified(libraryPath)
+	require.False(t, isLibraryABIVerified(libraryPath))
 }
 
 func TestGetCachedLibraryPath(t *testing.T) {

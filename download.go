@@ -133,6 +133,10 @@ func downloadFile(url, dest string) error {
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
+		_ = out.Close()
+		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("failed to write file %s: %w (also failed to remove partial file: %v)", dest, err, removeErr)
+		}
 		return fmt.Errorf("failed to write file %s: %w", dest, err)
 	}
 
@@ -183,9 +187,16 @@ func downloadJSON(url string, out any) error {
 // verifyChecksum verifies the SHA256 checksum of the downloaded file
 func verifyChecksum(filePath, checksumData string) error {
 	expectedChecksum := strings.TrimSpace(checksumData)
+	if expectedChecksum == "" {
+		return fmt.Errorf("checksum data is empty")
+	}
+
 	// Handle format like "abc123  filename.tar.gz"
 	if parts := strings.Fields(expectedChecksum); len(parts) >= 1 {
 		expectedChecksum = parts[0]
+	}
+	if expectedChecksum == "" {
+		return fmt.Errorf("checksum data is empty")
 	}
 
 	// Calculate actual checksum
@@ -868,7 +879,8 @@ func GetAvailableVersions() ([]string, error) {
 	return []string{release.TagName}, nil
 }
 
-// IsLibraryCached checks if the library is already cached and valid
+// IsLibraryCached checks if the library is already cached and loadable.
+// ABI compatibility is validated when loading through LoadTokenizerLibrary/DownloadAndCacheLibrary.
 func IsLibraryCached() bool {
 	cachedPath := GetCachedLibraryPath()
 	return isLibraryValid(cachedPath)

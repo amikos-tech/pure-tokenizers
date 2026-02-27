@@ -27,7 +27,7 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 
 ### 2. Rust Release Workflow (`.github/workflows/rust-release.yml`)
 
-**Triggers:** Rust release tags (`rust-v*`), Manual dispatch
+**Triggers:** Rust release tags (`rust-v*`)
 
 **Purpose:** Build native library artifacts for all supported platforms and publish them to the releases endpoint
 
@@ -37,7 +37,8 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 - Windows: `x86_64-pc-windows-msvc`
 
 **Jobs:**
-- **build-release**: Cross-compiles for all target platforms and publishes `libtokenizers-*.tar.gz` + checksums
+- **build**: Cross-compiles for all target platforms and uploads platform-specific `libtokenizers-*.tar.gz` artifacts
+- **release**: Generates `SHA256SUMS` and per-asset checksums, signs/verifies artifacts, then publishes to the releases endpoint
 
 **Artifacts:**
 - Platform-specific tar.gz archives containing the shared libraries
@@ -46,7 +47,7 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 
 ### 3. Go Release Workflow (`.github/workflows/go-release.yml`)
 
-**Triggers:** Go release tags (`v*`), Manual dispatch
+**Triggers:** Go release tags (`v*`)
 
 **Purpose:** Validate Go module release flow against published Rust artifacts and publish Go module release metadata
 
