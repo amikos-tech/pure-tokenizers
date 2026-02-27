@@ -110,7 +110,7 @@ jobs:
 
     - name: Build base branch
       working-directory: base
-      run: cargo build --release --locked
+      run: cargo build --release
 
     - name: Run benchmarks on base branch
       working-directory: base
