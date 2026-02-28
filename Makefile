@@ -142,6 +142,10 @@ security-tools:
 security-go:
 	./scripts/security_checks.sh
 
+.PHONY: test-release-index
+test-release-index:
+	./scripts/test_build_releases_index.sh
+
 .PHONY: hooks-install
 hooks-install:
 	lefthook install
