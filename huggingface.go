@@ -311,7 +311,7 @@ func normalizeHFBaseURL(baseURL string) (string, error) {
 	}
 	parsedURL, err := url.Parse(normalized)
 	if err != nil {
-		return "", errors.Wrap(err, "base URL must be a valid absolute URL")
+		return "", errors.Wrap(err, "failed to parse base URL")
 	}
 	if parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return "", errors.New("base URL must be a valid absolute URL")

@@ -313,6 +313,9 @@ tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
     tokenizers.WithHFOfflineMode(true))
 ```
 
+HuggingFace cache directories are created with `0750` permissions, and cached
+`tokenizer.json` files are written with `0600` (owner read/write only).
+
 ## Platform Support
 
 | Platform | Architecture | Binary | Status |
