@@ -328,28 +328,19 @@ jobs:
             --cache-control "public, max-age=60"
 
           # Maintain bounded project release history for clients that need more than latest.json.
+          # This logic is externalized to a script so it can be tested locally.
           if ! aws s3 cp "s3://${BUCKET}/${PROJECT}/releases.json" /tmp/releases-existing.json \
             --endpoint-url "${R2_ENDPOINT}" 2>/dev/null; then
-            echo '{"releases":[]}' > /tmp/releases-existing.json
-          fi
-          if ! jq -e '.releases | type == "array"' /tmp/releases-existing.json >/dev/null 2>&1; then
-            echo '{"releases":[]}' > /tmp/releases-existing.json
+            rm -f /tmp/releases-existing.json
           fi
 
-          NEW_ENTRY="$(jq -n \
-            --arg version "${VERSION}" \
-            --arg date "${RELEASE_DATE}" \
-            --arg prefix "${PROJECT}/${VERSION}/" \
-            --arg checksums_url "${PROJECT}/${VERSION}/SHA256SUMS" \
-            '{version: $version, date: $date, prefix: $prefix, checksums_url: $checksums_url}')"
-
-          jq --argjson entry "${NEW_ENTRY}" '
-            .releases = (([ $entry ] + (.releases // []))
-              | unique_by(.version)
-              | sort_by(.date)
-              | reverse
-              | .[:100])
-          ' /tmp/releases-existing.json > /tmp/releases.json
+          ./scripts/build_releases_index.sh \
+            --existing /tmp/releases-existing.json \
+            --output /tmp/releases.json \
+            --project "${PROJECT}" \
+            --version "${VERSION}" \
+            --date "${RELEASE_DATE}" \
+            --max 100
 
           ISSUER="https://token.actions.githubusercontent.com"
           IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/rust-release.yml@refs/tags/${VERSION}"

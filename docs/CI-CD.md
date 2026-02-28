@@ -81,7 +81,12 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
    git push origin main && git push origin v1.0.0
    ```
 
-3. **GitHub Actions automatically:**
+3. **Optional local metadata validation (before tagging):**
+   ```bash
+   make test-release-index
+   ```
+
+4. **GitHub Actions automatically:**
    - Builds libraries for all platforms
    - Runs comprehensive tests
    - Creates release with all assets
