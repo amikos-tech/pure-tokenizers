@@ -435,7 +435,7 @@ func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
 }
 
 func libraryABIFingerprint(path string) (string, error) {
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) // #nosec G703 -- path comes from controlled cache resolution and explicit user library overrides.
 	if err != nil {
 		return "", err
 	}

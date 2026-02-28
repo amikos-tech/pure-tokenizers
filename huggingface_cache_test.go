@@ -16,11 +16,11 @@ import (
 const (
 	// Default concurrency levels for tests. These can be overridden via build tags
 	// or environment variables for different testing scenarios (e.g., stress testing).
-	concurrentAccessSameModel = 10
+	concurrentAccessSameModel  = 10
 	concurrentAccessDiffModels = 3
-	concurrentReaders = 15
-	concurrentWriters = 5
-	concurrentValidations = 10
+	concurrentReaders          = 15
+	concurrentWriters          = 5
+	concurrentValidations      = 10
 
 	// concurrentErrorBufferMargin provides extra buffer capacity beyond the expected
 	// number of operations to prevent deadlocks if unexpected errors occur during
@@ -191,6 +191,12 @@ func isExpectedConcurrentCacheError(err error) bool {
 		return true
 	}
 
+	// Windows may return "CreateFile ...: Access is denied." during eviction races.
+	if strings.Contains(errMsgLower, "createfile") &&
+		strings.Contains(errMsgLower, "access is denied") {
+		return true
+	}
+
 	// Windows-specific file locking during concurrent access (ERROR_SHARING_VIOLATION)
 	// Note: Using case-insensitive matching as Windows error messages may vary in casing
 	if strings.Contains(errMsgLower, "process cannot access the file because it is being used by another process") {
@@ -298,7 +304,6 @@ func verifyGoroutineCompletion(t *testing.T, wg *sync.WaitGroup, timeout time.Du
 		t.Error("Timeout waiting for goroutines to complete")
 	}
 }
-
 
 func TestCheckHFHubCache(t *testing.T) {
 	// Create a temporary HF hub cache structure

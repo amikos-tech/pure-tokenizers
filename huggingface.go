@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -55,6 +56,7 @@ var (
 	// Shared HTTP client for HuggingFace downloads with connection pooling
 	hfHTTPClient *http.Client
 	hfClientOnce sync.Once
+	jitterNonce  atomic.Int64
 
 	// ErrCacheNotFound is returned when a requested cache file does not exist
 	ErrCacheNotFound = errors.New("cache file not found")
@@ -1043,8 +1045,14 @@ func secureJitter(baseDelay time.Duration) time.Duration {
 	limit := big.NewInt(maxJitter.Nanoseconds() + 1)
 	n, err := cryptorand.Int(cryptorand.Reader, limit)
 	if err != nil {
-		// Fallback to deterministic midpoint jitter if crypto randomness fails.
-		return maxJitter / 2
+		// Fallback mixes a monotonic counter with current time to preserve retry variance.
+		nonce := jitterNonce.Add(1)
+		now := time.Now().UnixNano()
+		mixed := now ^ nonce ^ (nonce << 13)
+		if mixed < 0 {
+			mixed = -mixed
+		}
+		return time.Duration(mixed % limit.Int64())
 	}
 	return time.Duration(n.Int64())
 }
