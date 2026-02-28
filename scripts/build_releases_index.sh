@@ -175,4 +175,5 @@ def dedupe_first_by_version:
 ' "$tmp_existing" >"$tmp_output"
 
 jq -e '.releases | type == "array"' "$tmp_output" >/dev/null
+trap 'rm -f "$tmp_existing"' EXIT
 mv "$tmp_output" "$output_path"

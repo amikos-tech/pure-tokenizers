@@ -32,7 +32,7 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 **Purpose:** Build native library artifacts for all supported platforms and publish them to the releases endpoint
 
 **Supported Platforms:**
-- Linux: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+- Linux: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
 - macOS: `x86_64-apple-darwin`, `aarch64-apple-darwin`
 - Windows: `x86_64-pc-windows-msvc`
 

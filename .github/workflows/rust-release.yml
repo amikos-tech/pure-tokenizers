@@ -321,13 +321,12 @@ jobs:
             --endpoint-url "${R2_ENDPOINT}"
 
           RELEASE_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          cat > /tmp/latest.json <<EOF
-          {
-            "version": "${VERSION}",
-            "date": "${RELEASE_DATE}",
-            "checksums_url": "${PROJECT}/${VERSION}/SHA256SUMS"
-          }
-          EOF
+          jq -n \
+            --arg version "${VERSION}" \
+            --arg date "${RELEASE_DATE}" \
+            --arg checksums_url "${PROJECT}/${VERSION}/SHA256SUMS" \
+            '{version: $version, date: $date, checksums_url: $checksums_url}' \
+            > /tmp/latest.json
 
           aws s3 cp /tmp/latest.json "s3://${BUCKET}/${PROJECT}/latest.json" \
             --endpoint-url "${R2_ENDPOINT}" \
@@ -357,7 +356,7 @@ jobs:
             --date "${RELEASE_DATE}" \
             --max 100
 
-          if ! jq -e '.releases | type == "array" and length > 0' /tmp/releases.json >/dev/null 2>&1; then
+          if ! jq -e '.releases | type == "array" and length > 0' /tmp/releases.json >/dev/null; then
             echo "Generated releases.json is missing or invalid." >&2
             exit 1
           fi
