@@ -276,7 +276,7 @@ func TestHFConfigOptions(t *testing.T) {
 	// Test WithHFBaseURL
 	err = WithHFBaseURL("  https://example.test/  ")(tok)
 	assert.NoError(t, err)
-	assert.Equal(t, "https://example.test", tok.hfConfig.BaseURL)
+	assert.Equal(t, "https://example.test", tok.hfConfig.GetBaseURL())
 
 	err = WithHFBaseURL("   ")(tok)
 	assert.EqualError(t, err, "base URL cannot be empty")
@@ -290,7 +290,7 @@ func TestHFConfigOptions(t *testing.T) {
 	err = WithHFBaseURL("https://mirror.example.com")(tok2)
 	assert.NoError(t, err)
 	assert.NotNil(t, tok2.hfConfig)
-	assert.Equal(t, "https://mirror.example.com", tok2.hfConfig.BaseURL)
+	assert.Equal(t, "https://mirror.example.com", tok2.hfConfig.GetBaseURL())
 
 	// Test WithHFTimeout
 	err = WithHFTimeout(10 * time.Second)(tok)
@@ -547,7 +547,7 @@ func TestDownloadWithRetry(t *testing.T) {
 	defer mockServer.Close()
 
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -649,7 +649,7 @@ func TestConcurrentDownloads(t *testing.T) {
 	defer mockServer.Close()
 
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
@@ -737,7 +737,7 @@ func TestConnectionReuse(t *testing.T) {
 
 	// Initialize client with test TLS config that accepts test certificates
 	config := &HFConfig{
-		BaseURL:    server.URL,
+		baseURL:    server.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
@@ -876,7 +876,7 @@ func TestRetryAfterHeader(t *testing.T) {
 	defer mockServer.Close()
 
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -919,7 +919,7 @@ func TestRetryAfterWithHTTPDate(t *testing.T) {
 	defer mockServer.Close()
 
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -968,7 +968,7 @@ func TestFallbackToExponentialBackoff(t *testing.T) {
 	defer mockServer.Close()
 
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",

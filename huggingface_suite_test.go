@@ -269,7 +269,7 @@ func TestURLConstruction(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &HFConfig{Revision: tc.revision, BaseURL: tc.baseURL}
+			cfg := &HFConfig{Revision: tc.revision, baseURL: tc.baseURL}
 			url := buildHFDownloadURL(tc.modelID, cfg)
 			assert.Equal(t, tc.expectedURL, url)
 		})
@@ -375,7 +375,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 	t.Run("Successful download", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
-			BaseURL:    mockServer.URL + "/",
+			baseURL:    mockServer.URL + "/",
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -397,7 +397,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 	t.Run("Retry on failure", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -413,7 +413,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 	t.Run("Rate limiting with Retry-After", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    10 * time.Second,
@@ -435,7 +435,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 
 		// Without token - should fail
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -458,7 +458,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 		mockServer.SetResponseDelay(2 * time.Second)
 
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    500 * time.Millisecond, // Very short timeout
@@ -673,7 +673,7 @@ func BenchmarkFromHuggingFaceWithoutCache(b *testing.B) {
 
 	tempDir := b.TempDir()
 	config := &HFConfig{
-		BaseURL:    mockServer.URL,
+		baseURL:    mockServer.URL,
 		Revision:   "main",
 		CacheDir:   tempDir,
 		Timeout:    5 * time.Second,
@@ -771,9 +771,9 @@ func buildHFDownloadURL(modelID string, config *HFConfig) string {
 	if revision == "" {
 		revision = "main"
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = HFHubBaseURL
+	baseURL, err := resolveHFBaseURL(config)
+	if err != nil {
+		baseURL = hfDefaultHubBaseURL
 	}
 	return fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", baseURL, modelID, revision)
 }
@@ -794,7 +794,7 @@ func TestStreamingDownload(t *testing.T) {
 
 	t.Run("Handle slow streaming response", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    10 * time.Second, // Long enough for slow response
@@ -813,7 +813,7 @@ func TestStreamingDownload(t *testing.T) {
 
 	t.Run("Handle partial response failure", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -852,7 +852,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("Normal file size", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -867,7 +867,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File exceeding default size limit", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -882,7 +882,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File exceeding custom size limit", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:          mockServer.URL,
+			baseURL:          mockServer.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          5 * time.Second,
@@ -898,7 +898,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File size within custom limit", func(t *testing.T) {
 		config := &HFConfig{
-			BaseURL:          mockServer.URL,
+			baseURL:          mockServer.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          5 * time.Second,
@@ -944,7 +944,7 @@ func TestRedirectHandling(t *testing.T) {
 	t.Run("Handle HTTP redirect", func(t *testing.T) {
 		mockServer.SetSimulateRedirect(true)
 		config := &HFConfig{
-			BaseURL:    mockServer.URL,
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
