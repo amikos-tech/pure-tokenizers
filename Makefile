@@ -133,6 +133,19 @@ lint-rust:
 fmt-rust:
 	cargo fmt
 
+.PHONY: security-tools
+security-tools:
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+.PHONY: security-go
+security-go:
+	./scripts/security_checks.sh
+
+.PHONY: hooks-install
+hooks-install:
+	lefthook install
+
 # Release targets
 .PHONY: create-release-assets
 create-release-assets: build-all-targets
@@ -171,6 +184,9 @@ dev-setup:
 	go install gotest.tools/gotestsum@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install golang.org/x/perf/cmd/benchstat@latest
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install github.com/securego/gosec/v2/cmd/gosec@latest
+	go install github.com/evilmartians/lefthook@latest
 
 .PHONY: check-env
 check-env:

@@ -346,6 +346,20 @@ make test
 # Run linting
 make lint-fix      # Go linting
 make lint-rust     # Rust linting
+
+# Run security checks
+make security-go   # go vet + govulncheck + gosec
+```
+
+### Security Checks
+
+```bash
+# Run all Go security checks locally
+make security-go
+
+# Install and enable git hooks (lefthook)
+go install github.com/evilmartians/lefthook@latest
+lefthook install
 ```
 
 ### Testing

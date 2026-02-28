@@ -68,6 +68,9 @@ func TestValidateModelID(t *testing.T) {
 		{"Valid owner and repo at limit", strings.Repeat("a", 96) + "/" + strings.Repeat("b", 96), false},
 		{"Invalid special chars", "model@name", true},
 		{"Valid underscore dash dot", "model_name-v1.0", false},
+		{"Invalid dot repo", ".", true},
+		{"Invalid dotdot repo", "..", true},
+		{"Invalid dot owner", "./model", true},
 		{"Empty model ID", "", false}, // This is handled separately
 	}
 
@@ -267,6 +270,10 @@ func TestHFConfigOptions(t *testing.T) {
 	err = WithHFRevision("v2.0")(tok)
 	assert.NoError(t, err)
 	assert.Equal(t, "v2.0", tok.hfConfig.Revision)
+	err = WithHFRevision("../bad")(tok)
+	assert.EqualError(t, err, "revision contains forbidden path segment")
+	err = WithHFRevision("refs\\\\bad")(tok)
+	assert.EqualError(t, err, "revision cannot contain backslashes")
 
 	// Test WithHFCacheDir
 	err = WithHFCacheDir("/custom/dir")(tok)

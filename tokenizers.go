@@ -1,6 +1,7 @@
 package tokenizers
 
 import (
+	"math"
 	"os"
 	"unsafe"
 
@@ -243,6 +244,22 @@ type Tokenizer struct {
 
 const LibName = "tokenizers"
 
+func intToUint32Bounded(v int, fieldName string) (uint32, error) {
+	if v < 0 || uint64(v) > math.MaxUint32 {
+		return 0, errors.Errorf("%s exceeds uint32 limits", fieldName)
+	}
+	// #nosec G115 -- bounds are explicitly checked against math.MaxUint32 above.
+	return uint32(v), nil
+}
+
+func uintToUint32Bounded(v uint, fieldName string) (uint32, error) {
+	if uint64(v) > math.MaxUint32 {
+		return 0, errors.Errorf("%s exceeds uint32 limits", fieldName)
+	}
+	// #nosec G115 -- bounds are explicitly checked against math.MaxUint32 above.
+	return uint32(v), nil
+}
+
 func FromFile(configFile string, opts ...TokenizerOption) (*Tokenizer, error) {
 	if configFile == "" {
 		return nil, errors.New("config file path cannot be empty")
@@ -252,7 +269,7 @@ func FromFile(configFile string, opts ...TokenizerOption) (*Tokenizer, error) {
 	} else if err != nil {
 		return nil, errors.Wrapf(err, "failed to access config file: %s", configFile)
 	}
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(configFile) // #nosec G304 -- configFile is intentionally caller-provided and pre-validated by os.Stat.
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read config file: %s", configFile)
 	}
@@ -314,8 +331,12 @@ func FromBytes(config []byte, opts ...TokenizerOption) (*Tokenizer, error) {
 			Strategy: tokenizer.PaddingStrategy,
 		}
 	}
+	configLen, err := intToUint32Bounded(len(config), "config length")
+	if err != nil {
+		return nil, err
+	}
 	var result TokenizerResult
-	errCode := tokenizer.fromBytes(config, uint32(len(config)), tOpts, &result)
+	errCode := tokenizer.fromBytes(config, configLen, tOpts, &result)
 	if errCode != SUCCESS {
 		lastError := getErrorForCode(errCode)
 		return nil, errors.Wrapf(lastError, "failed to create tokenizer from bytes")
@@ -396,10 +417,10 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	}()
 	result := &EncodeResult{}
 	if buff.IDs != nil {
-		result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...)
+		result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...) // #nosec G103 -- FFI buffer originates from trusted Rust library memory.
 	}
 	if buff.TypeIDs != nil {
-		result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...)
+		result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...) // #nosec G103 -- FFI buffer originates from trusted Rust library memory.
 	}
 	specialTokensMask, attentionMask := MasksFromBuf(buff)
 	if specialTokensMask != nil {
@@ -412,10 +433,18 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 	}
 	result.Tokens = TokensFromBuf(buff)
 	if buff.Offsets != nil {
-		offsets := unsafe.Slice((*[2]uint)(unsafe.Pointer(buff.Offsets)), buff.Len)
+		offsets := unsafe.Slice((*[2]uint)(unsafe.Pointer(buff.Offsets)), buff.Len) // #nosec G103 -- Offset buffer pointer is owned by the Rust FFI layer.
 		result.Offsets = make([]uint32, 0, len(offsets)*2)
 		for _, offset := range offsets {
-			result.Offsets = append(result.Offsets, uint32(offset[0]), uint32(offset[1]))
+			start, err := uintToUint32Bounded(offset[0], "offset start")
+			if err != nil {
+				return nil, err
+			}
+			end, err := uintToUint32Bounded(offset[1], "offset end")
+			if err != nil {
+				return nil, err
+			}
+			result.Offsets = append(result.Offsets, start, end)
 		}
 	}
 
@@ -464,8 +493,8 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 
 	rc := t.encodeBatchPairs(
 		t.tokenizerh,
-		(**byte)(unsafe.Pointer(&cSequences[0])),
-		(**byte)(unsafe.Pointer(&cPairs[0])),
+		(**byte)(unsafe.Pointer(&cSequences[0])), // #nosec G103 -- Passing stable Go-managed C-string pointers to FFI.
+		(**byte)(unsafe.Pointer(&cPairs[0])),     // #nosec G103 -- Passing stable Go-managed C-string pointers to FFI.
 		uintptr(len(sequences)),
 		&options,
 		&buffers[0],
@@ -483,10 +512,10 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 		result := &EncodeResult{}
 
 		if buff.IDs != nil {
-			result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...)
+			result.IDs = append([]uint32(nil), unsafe.Slice(buff.IDs, buff.Len)...) // #nosec G103 -- FFI buffer originates from trusted Rust library memory.
 		}
 		if buff.TypeIDs != nil {
-			result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...)
+			result.TypeIDs = append([]uint32(nil), unsafe.Slice(buff.TypeIDs, buff.Len)...) // #nosec G103 -- FFI buffer originates from trusted Rust library memory.
 		}
 
 		specialTokensMask, attentionMask := MasksFromBuf(*buff)
@@ -502,10 +531,18 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 		result.Tokens = TokensFromBuf(*buff)
 
 		if buff.Offsets != nil {
-			offsets := unsafe.Slice((*[2]uint)(unsafe.Pointer(buff.Offsets)), buff.Len)
+			offsets := unsafe.Slice((*[2]uint)(unsafe.Pointer(buff.Offsets)), buff.Len) // #nosec G103 -- Offset buffer pointer is owned by the Rust FFI layer.
 			result.Offsets = make([]uint32, 0, len(offsets)*2)
 			for _, offset := range offsets {
-				result.Offsets = append(result.Offsets, uint32(offset[0]), uint32(offset[1]))
+				start, err := uintToUint32Bounded(offset[0], "offset start")
+				if err != nil {
+					return nil, err
+				}
+				end, err := uintToUint32Bounded(offset[1], "offset end")
+				if err != nil {
+					return nil, err
+				}
+				result.Offsets = append(result.Offsets, start, end)
 			}
 		}
 
@@ -538,8 +575,11 @@ func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error)
 		return "", nil
 	}
 
-	idsPtr := (*uint32)(unsafe.Pointer(&ids[0]))
-	idLen := uint32(len(ids))
+	idsPtr := (*uint32)(unsafe.Pointer(&ids[0])) // #nosec G103 -- IDs slice is contiguous Go memory passed by pointer to FFI.
+	idLen, err := intToUint32Bounded(len(ids), "ids length")
+	if err != nil {
+		return "", err
+	}
 	var cStrPtr unsafe.Pointer
 	errCode := t.decode(t.tokenizerh, idsPtr, idLen, skipSpecialTokens, &cStrPtr)
 	if errCode != SUCCESS {
@@ -569,12 +609,13 @@ func goStringFromPtr(ptr unsafe.Pointer) string {
 	// Calculate string length
 	p := (*byte)(ptr)
 	n := 0
+	// #nosec G103 -- Pointer traversal over a null-terminated string returned by trusted FFI.
 	for *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(n))) != 0 {
 
 		n++
 	}
 	// Create a Go string from the bytes
-	return string(unsafe.Slice(p, n))
+	return string(unsafe.Slice(p, n)) // #nosec G103 -- Converts validated null-terminated FFI buffer into a Go string.
 }
 func (t *Tokenizer) VocabSize() (uint32, error) {
 	if t.vocabSize == nil || t.tokenizerh == nil {
