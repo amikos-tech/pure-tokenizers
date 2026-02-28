@@ -33,13 +33,13 @@ jobs:
       run: go vet ./...
 
     - name: Install govulncheck
-      run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+      run: go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
 
     - name: Run govulncheck
       run: govulncheck ./...
 
     - name: Install gosec
-      run: go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+      run: go install "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}"
 
     - name: Run gosec
       run: gosec ./...

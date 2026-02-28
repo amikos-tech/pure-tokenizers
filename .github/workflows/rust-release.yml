@@ -302,7 +302,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload artifacts to R2
+      - name: Upload artifacts and publish release metadata to R2
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -313,10 +313,11 @@ jobs:
             --recursive \
             --endpoint-url "${R2_ENDPOINT}"
 
+          RELEASE_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           cat > /tmp/latest.json <<EOF
           {
             "version": "${VERSION}",
-            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "date": "${RELEASE_DATE}",
             "checksums_url": "${PROJECT}/${VERSION}/SHA256SUMS"
           }
           EOF
@@ -326,7 +327,58 @@ jobs:
             --content-type "application/json" \
             --cache-control "public, max-age=60"
 
-      - name: Purge latest.json from CDN cache
+          # Maintain bounded project release history for clients that need more than latest.json.
+          if ! aws s3 cp "s3://${BUCKET}/${PROJECT}/releases.json" /tmp/releases-existing.json \
+            --endpoint-url "${R2_ENDPOINT}" 2>/dev/null; then
+            echo '{"releases":[]}' > /tmp/releases-existing.json
+          fi
+          if ! jq -e '.releases | type == "array"' /tmp/releases-existing.json >/dev/null 2>&1; then
+            echo '{"releases":[]}' > /tmp/releases-existing.json
+          fi
+
+          NEW_ENTRY="$(jq -n \
+            --arg version "${VERSION}" \
+            --arg date "${RELEASE_DATE}" \
+            --arg prefix "${PROJECT}/${VERSION}/" \
+            --arg checksums_url "${PROJECT}/${VERSION}/SHA256SUMS" \
+            '{version: $version, date: $date, prefix: $prefix, checksums_url: $checksums_url}')"
+
+          jq --argjson entry "${NEW_ENTRY}" '
+            .releases = (([ $entry ] + (.releases // []))
+              | unique_by(.version)
+              | sort_by(.date)
+              | reverse
+              | .[:100])
+          ' /tmp/releases-existing.json > /tmp/releases.json
+
+          ISSUER="https://token.actions.githubusercontent.com"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/rust-release.yml@refs/tags/${VERSION}"
+          cosign sign-blob --yes \
+            --oidc-issuer "${ISSUER}" \
+            --output-signature /tmp/releases.json.sig \
+            --output-certificate /tmp/releases.json.pem \
+            /tmp/releases.json
+          cosign verify-blob \
+            --signature /tmp/releases.json.sig \
+            --certificate /tmp/releases.json.pem \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer "${ISSUER}" \
+            /tmp/releases.json
+
+          aws s3 cp /tmp/releases.json "s3://${BUCKET}/${PROJECT}/releases.json" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type "application/json" \
+            --cache-control "public, max-age=60"
+          aws s3 cp /tmp/releases.json.sig "s3://${BUCKET}/${PROJECT}/releases.json.sig" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type "text/plain" \
+            --cache-control "public, max-age=60"
+          aws s3 cp /tmp/releases.json.pem "s3://${BUCKET}/${PROJECT}/releases.json.pem" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type "text/plain" \
+            --cache-control "public, max-age=60"
+
+      - name: Purge release metadata from CDN cache
         if: vars.CF_ZONE_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
         shell: bash
         env:
@@ -339,8 +391,8 @@ jobs:
             "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data "{\"files\":[\"https://${RELEASES_DOMAIN}/${PROJECT}/latest.json\"]}"
-          echo "CDN cache purged for ${PROJECT}/latest.json"
+            --data "{\"files\":[\"https://${RELEASES_DOMAIN}/${PROJECT}/latest.json\",\"https://${RELEASES_DOMAIN}/${PROJECT}/releases.json\",\"https://${RELEASES_DOMAIN}/${PROJECT}/releases.json.sig\",\"https://${RELEASES_DOMAIN}/${PROJECT}/releases.json.pem\"]}"
+          echo "CDN cache purged for ${PROJECT}/latest.json and ${PROJECT}/releases.json"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
