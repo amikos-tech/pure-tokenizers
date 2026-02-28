@@ -38,7 +38,7 @@ The project uses GitHub Actions for CI/CD with multiple workflows to ensure code
 
 **Jobs:**
 - **build**: Cross-compiles for all target platforms and uploads platform-specific `libtokenizers-*.tar.gz` artifacts
-- **release**: Generates `SHA256SUMS` and per-asset checksums, signs/verifies artifacts, then publishes to the releases endpoint
+- **release**: Generates `SHA256SUMS` and per-asset checksums, signs/verifies artifacts, then publishes artifacts plus `latest.json` and bounded `releases.json` metadata to the releases endpoint
 
 **Artifacts:**
 - Platform-specific tar.gz archives containing the shared libraries
