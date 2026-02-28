@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,8 +45,9 @@ const (
 )
 
 var (
-	HFHubBaseURL   = "https://huggingface.co" // Variable to allow testing with mock server
-	libraryVersion = "0.1.0"                  // Default version, will be set from library if available
+	// Deprecated: use HFConfig.BaseURL (or WithHFBaseURL) instead of mutating global state.
+	HFHubBaseURL   = "https://huggingface.co"
+	libraryVersion = "0.1.0" // Default version, will be set from library if available
 
 	// Shared HTTP client for HuggingFace downloads with connection pooling
 	hfHTTPClient *http.Client
@@ -243,8 +245,8 @@ type HFConfig struct {
 	// or DefaultMaxTokenizerSize (500MB) if the environment variable is not set.
 	// Use WithHFMaxTokenizerSize to explicitly set this value.
 	MaxTokenizerSize int64
-	// BaseURL is the base URL for HuggingFace Hub API (defaults to HFHubBaseURL if empty)
-	// This is primarily used for testing with mock servers
+	// BaseURL is the base URL for HuggingFace Hub API.
+	// Defaults to "https://huggingface.co" when empty.
 	BaseURL string
 
 	// HTTP client pooling configuration
@@ -403,6 +405,34 @@ func WithHFCacheDir(dir string) TokenizerOption {
 	}
 }
 
+// WithHFBaseURL sets a custom HuggingFace base URL.
+// This is primarily useful for tests and custom mirrors.
+// Leading/trailing whitespace and trailing slashes are removed.
+func WithHFBaseURL(baseURL string) TokenizerOption {
+	return func(t *Tokenizer) error {
+		normalized := strings.TrimSpace(baseURL)
+		if normalized == "" {
+			return errors.New("base URL cannot be empty")
+		}
+		parsedURL, err := url.Parse(normalized)
+		if err != nil {
+			return errors.Wrap(err, "base URL must be a valid absolute URL")
+		}
+		if parsedURL.Scheme == "" || parsedURL.Host == "" {
+			return errors.New("base URL must be a valid absolute URL")
+		}
+		scheme := strings.ToLower(parsedURL.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return errors.New("base URL scheme must be http or https")
+		}
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		t.hfConfig.BaseURL = strings.TrimRight(normalized, "/")
+		return nil
+	}
+}
+
 // WithHFTimeout sets the download timeout for HuggingFace requests
 func WithHFTimeout(timeout time.Duration) TokenizerOption {
 	return func(t *Tokenizer) error {
@@ -445,7 +475,7 @@ func WithHFMaxTokenizerSize(maxSize int64) TokenizerOption {
 
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
 func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
-	baseURL := config.BaseURL
+	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = HFHubBaseURL
 	}
