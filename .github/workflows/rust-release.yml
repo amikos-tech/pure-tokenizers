@@ -296,7 +296,14 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="s3://${BUCKET}/${PROJECT}/${VERSION}/"
-          if aws s3 ls "${PREFIX}" --endpoint-url "${R2_ENDPOINT}" | grep -q .; then
+          immutability_check_err="/tmp/immutability-check.err"
+          if ! existing_prefix_listing="$(aws s3 ls "${PREFIX}" --endpoint-url "${R2_ENDPOINT}" 2>"${immutability_check_err}")"; then
+            echo "Failed to check release immutability for ${PREFIX}." >&2
+            cat "${immutability_check_err}" >&2
+            exit 1
+          fi
+          rm -f "${immutability_check_err}"
+          if [[ -n "${existing_prefix_listing}" ]]; then
             echo "Release prefix already exists: ${PREFIX}"
             echo "Refusing to overwrite immutable release artifacts."
             exit 1
@@ -332,7 +339,7 @@ jobs:
           releases_fetch_err="/tmp/releases-fetch.err"
           if ! aws s3 cp "s3://${BUCKET}/${PROJECT}/releases.json" /tmp/releases-existing.json \
             --endpoint-url "${R2_ENDPOINT}" 2>"${releases_fetch_err}"; then
-            if grep -qiE '404|NoSuchKey|Not Found|HeadObject operation' "${releases_fetch_err}"; then
+            if grep -qiE '404|NoSuchKey' "${releases_fetch_err}"; then
               rm -f /tmp/releases-existing.json
             else
               echo "Failed to fetch existing releases.json from R2." >&2

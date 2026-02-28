@@ -161,6 +161,7 @@ assert_eq "$(jq -r '.releases[2].version' "$out_bounded")" "v0.1.2" "oldest reta
 invalid_date_existing="${work_dir}/invalid-date.json"
 out_invalid_date="${work_dir}/out-invalid-date.json"
 echo '{"releases":[]}' >"$invalid_date_existing"
+rm -f "$out_invalid_date"
 assert_fails \
   "invalid --date should fail." \
   "${SCRIPT}" \
@@ -170,6 +171,10 @@ assert_fails \
   --version v0.1.4 \
   --date invalid-date \
   --max 3
+if [[ -e "$out_invalid_date" ]]; then
+  echo "Assertion failed: failed invocation should not create output file." >&2
+  exit 1
+fi
 
 # Case 8: argument validation should fail on bad flags and values
 assert_fails "missing required args should fail." "${SCRIPT}" --output "$out_invalid_date"
@@ -177,5 +182,16 @@ assert_fails "--max must reject zero." "${SCRIPT}" --output "$out_invalid_date" 
 assert_fails "--max must reject non-integers." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --max abc
 assert_fails "unknown flags should fail." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --unknown value
 assert_fails "trailing --max without value should fail." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --max
+
+# Case 9: invocation without --existing should still succeed
+out_no_existing_flag="${work_dir}/out-no-existing-flag.json"
+"${SCRIPT}" \
+  --output "$out_no_existing_flag" \
+  --project pure-tokenizers \
+  --version v0.1.5 \
+  --date 2026-03-02T00:00:00Z \
+  --max 3
+assert_eq "$(jq -r '.releases | length' "$out_no_existing_flag")" "1" "missing --existing should initialize from empty"
+assert_eq "$(jq -r '.releases[0].version' "$out_no_existing_flag")" "v0.1.5" "missing --existing should still use requested version"
 
 echo "All release index tests passed."

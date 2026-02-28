@@ -5,9 +5,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  build_releases_index.sh --output <path> --project <name> --version <tag> --date <rfc3339> [--existing <path>] [--max <n>]
+  build_releases_index.sh --output <path> --project <name> --version <tag> --date <utc-timestamp> [--existing <path>] [--max <n>]
 
 Builds a bounded releases.json index for R2 release metadata.
+`--max` defaults to 100.
 EOF
 }
 
