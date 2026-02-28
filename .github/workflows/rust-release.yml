@@ -295,17 +295,22 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          PREFIX="s3://${BUCKET}/${PROJECT}/${VERSION}/"
+          PREFIX="${PROJECT}/${VERSION}/"
           immutability_check_err="/tmp/immutability-check.err"
           trap 'rm -f "${immutability_check_err}"' EXIT
-          if ! existing_prefix_listing="$(aws s3 ls "${PREFIX}" --endpoint-url "${R2_ENDPOINT}" 2>"${immutability_check_err}")"; then
-            echo "Failed to check release immutability for ${PREFIX}." >&2
+          if ! existing_prefix_listing="$(aws s3api list-objects-v2 \
+            --bucket "${BUCKET}" \
+            --prefix "${PREFIX}" \
+            --max-keys 1 \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --output json 2>"${immutability_check_err}")"; then
+            echo "Failed to check release immutability for s3://${BUCKET}/${PREFIX}." >&2
             cat "${immutability_check_err}" >&2
             exit 1
           fi
           rm -f "${immutability_check_err}"
-          if [[ -n "${existing_prefix_listing}" ]]; then
-            echo "Release prefix already exists: ${PREFIX}"
+          if jq -e '.Contents | type == "array" and length > 0' >/dev/null <<<"${existing_prefix_listing}"; then
+            echo "Release prefix already exists: s3://${BUCKET}/${PREFIX}"
             echo "Refusing to overwrite immutable release artifacts."
             exit 1
           fi
