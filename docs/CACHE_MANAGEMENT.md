@@ -37,6 +37,10 @@ Stores tokenizer.json files downloaded from HuggingFace Hub.
 - Linux: `~/.cache/tokenizers/lib/hf/`
 - Windows: `%APPDATA%/tokenizers/lib/hf/`
 
+**Default Permissions:**
+- Directories: `0750`
+- Cached `tokenizer.json` files: `0600` (owner read/write only)
+
 ## Directory Structure
 
 ### Complete Cache Hierarchy
@@ -257,8 +261,9 @@ rm -rf ~/.cache/tokenizers/lib/hf/models/google--*
 If you encounter permission errors:
 
 ```bash
-# Fix permissions on cache directory
-chmod -R 755 ~/.cache/tokenizers/
+# Fix permissions for HuggingFace cache (Linux/macOS paths shown)
+HF_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/tokenizers/lib/hf"
+chmod -R u+rwX,go-rwx "$HF_CACHE"
 ```
 
 #### Corrupted Cache

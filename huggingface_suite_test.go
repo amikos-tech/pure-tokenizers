@@ -1,10 +1,5 @@
 package tokenizers
 
-// NOTE: This test suite modifies global state (HFHubBaseURL) for testing purposes.
-// In production code, consider using dependency injection or test-specific configs
-// to avoid global state modifications. For now, tests properly restore the original
-// values using defer statements to ensure test isolation.
-
 import (
 	"context"
 	"encoding/json"
@@ -226,50 +221,55 @@ func (m *MockHFServer) SetSimulateRedirect(redirect bool) {
 	m.mu.Unlock()
 }
 
-// Test utilities
-func setupTestEnvironment(t *testing.T) (string, func()) {
-	tempDir := t.TempDir()
-	originalURL := HFHubBaseURL
-	cleanup := func() {
-		HFHubBaseURL = originalURL
-	}
-	return tempDir, cleanup
-}
-
-// Skip conditions for environment-specific tests
-// These functions are kept for potential future use in integration tests
-
 // Unit Tests - Download Logic
 func TestURLConstruction(t *testing.T) {
 	testCases := []struct {
 		name        string
 		modelID     string
 		revision    string
+		baseURL     string
 		expectedURL string
 	}{
 		{
 			name:        "Simple model ID",
 			modelID:     "bert-base-uncased",
 			revision:    "main",
+			baseURL:     "",
 			expectedURL: "https://huggingface.co/bert-base-uncased/resolve/main/tokenizer.json",
 		},
 		{
 			name:        "Model with organization",
 			modelID:     "google/flan-t5",
 			revision:    "v1.0",
+			baseURL:     "",
 			expectedURL: "https://huggingface.co/google/flan-t5/resolve/v1.0/tokenizer.json",
 		},
 		{
 			name:        "Model with commit hash",
 			modelID:     "model-name",
 			revision:    "abc123def456",
+			baseURL:     "",
 			expectedURL: "https://huggingface.co/model-name/resolve/abc123def456/tokenizer.json",
+		},
+		{
+			name:        "Custom base URL",
+			modelID:     "bert-base-uncased",
+			revision:    "main",
+			baseURL:     "https://mirror.example.com",
+			expectedURL: "https://mirror.example.com/bert-base-uncased/resolve/main/tokenizer.json",
+		},
+		{
+			name:        "Custom base URL with trailing slash",
+			modelID:     "bert-base-uncased",
+			revision:    "main",
+			baseURL:     "https://mirror.example.com/",
+			expectedURL: "https://mirror.example.com/bert-base-uncased/resolve/main/tokenizer.json",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &HFConfig{Revision: tc.revision}
+			cfg := &HFConfig{Revision: tc.revision, baseURL: tc.baseURL}
 			url := buildHFDownloadURL(tc.modelID, cfg)
 			assert.Equal(t, tc.expectedURL, url)
 		})
@@ -370,13 +370,12 @@ func TestDownloadWithMockServer(t *testing.T) {
 	mockServer := newMockHFServer(t)
 	defer mockServer.Close()
 
-	tempDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-	HFHubBaseURL = mockServer.URL
+	tempDir := t.TempDir()
 
 	t.Run("Successful download", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
+			baseURL:    mockServer.URL + "/",
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -398,6 +397,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 	t.Run("Retry on failure", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -413,6 +413,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 	t.Run("Rate limiting with Retry-After", func(t *testing.T) {
 		mockServer.ResetCounters()
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    10 * time.Second,
@@ -434,6 +435,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 
 		// Without token - should fail
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -456,6 +458,7 @@ func TestDownloadWithMockServer(t *testing.T) {
 		mockServer.SetResponseDelay(2 * time.Second)
 
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    500 * time.Millisecond, // Very short timeout
@@ -634,23 +637,10 @@ func TestConcurrentCacheAccess(t *testing.T) {
 }
 
 // Benchmark Tests
-func BenchmarkFromHuggingFaceWithCache(b *testing.B) {
+func BenchmarkLoadFromCache(b *testing.B) {
 	b.StopTimer() // Don't time setup
 
-	// Create mock server - benchmark functions need a special approach
-	mockServer := &MockHFServer{
-		requestLog: make([]string, 0),
-	}
-	mockServer.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(bertTokenizerJSON))
-	}))
-	defer mockServer.Close()
-
 	tempDir := b.TempDir()
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
 
 	// Pre-populate cache
 	modelID := "bert-base-uncased"
@@ -682,11 +672,8 @@ func BenchmarkFromHuggingFaceWithoutCache(b *testing.B) {
 	defer mockServer.Close()
 
 	tempDir := b.TempDir()
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Revision:   "main",
 		CacheDir:   tempDir,
 		Timeout:    5 * time.Second,
@@ -722,15 +709,14 @@ func TestE2EHuggingFaceWorkflow(t *testing.T) {
 	mockServer := newMockHFServer(t)
 	defer mockServer.Close()
 
-	tempDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-	HFHubBaseURL = mockServer.URL
+	tempDir := t.TempDir()
 
 	modelID := "bert-base-uncased"
 	text := "Hello, world!"
 
 	// Step 1: Load tokenizer from HF
 	tok1, err := FromHuggingFace(modelID,
+		WithHFBaseURL(mockServer.URL),
 		WithHFCacheDir(tempDir),
 		WithHFTimeout(5*time.Second),
 	)
@@ -758,6 +744,7 @@ func TestE2EHuggingFaceWorkflow(t *testing.T) {
 	// Step 5: Load again and verify cache hit
 	mockServer.ResetCounters()
 	tok2, err := FromHuggingFace(modelID,
+		WithHFBaseURL(mockServer.URL),
 		WithHFCacheDir(tempDir),
 		WithHFOfflineMode(true), // Force using cache
 	)
@@ -784,7 +771,11 @@ func buildHFDownloadURL(modelID string, config *HFConfig) string {
 	if revision == "" {
 		revision = "main"
 	}
-	return fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", HFHubBaseURL, modelID, revision)
+	baseURL, err := resolveHFBaseURL(config)
+	if err != nil {
+		baseURL = hfDefaultHubBaseURL
+	}
+	return fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", baseURL, modelID, revision)
 }
 
 func loadFromCache(cachePath string) ([]byte, error) {
@@ -799,12 +790,11 @@ func TestStreamingDownload(t *testing.T) {
 	mockServer := newMockHFServer(t)
 	defer mockServer.Close()
 
-	tempDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-	HFHubBaseURL = mockServer.URL
+	tempDir := t.TempDir()
 
 	t.Run("Handle slow streaming response", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    10 * time.Second, // Long enough for slow response
@@ -823,6 +813,7 @@ func TestStreamingDownload(t *testing.T) {
 
 	t.Run("Handle partial response failure", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -857,12 +848,11 @@ func TestFileSizeValidation(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	tempDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-	HFHubBaseURL = mockServer.URL
+	tempDir := t.TempDir()
 
 	t.Run("Normal file size", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -877,6 +867,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File exceeding default size limit", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,
@@ -891,6 +882,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File exceeding custom size limit", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:          mockServer.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          5 * time.Second,
@@ -906,6 +898,7 @@ func TestFileSizeValidation(t *testing.T) {
 
 	t.Run("File size within custom limit", func(t *testing.T) {
 		config := &HFConfig{
+			baseURL:          mockServer.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          5 * time.Second,
@@ -946,13 +939,12 @@ func TestRedirectHandling(t *testing.T) {
 	mockServer := newMockHFServer(t)
 	defer mockServer.Close()
 
-	tempDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-	HFHubBaseURL = mockServer.URL
+	tempDir := t.TempDir()
 
 	t.Run("Handle HTTP redirect", func(t *testing.T) {
 		mockServer.SetSimulateRedirect(true)
 		config := &HFConfig{
+			baseURL:    mockServer.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    5 * time.Second,

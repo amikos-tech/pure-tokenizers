@@ -68,6 +68,9 @@ func TestValidateModelID(t *testing.T) {
 		{"Valid owner and repo at limit", strings.Repeat("a", 96) + "/" + strings.Repeat("b", 96), false},
 		{"Invalid special chars", "model@name", true},
 		{"Valid underscore dash dot", "model_name-v1.0", false},
+		{"Invalid dot repo", ".", true},
+		{"Invalid dotdot repo", "..", true},
+		{"Invalid dot owner", "./model", true},
 		{"Empty model ID", "", false}, // This is handled separately
 	}
 
@@ -183,11 +186,6 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL for testing
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	// Create a temporary directory for cache
 	tempDir := t.TempDir()
 
@@ -202,6 +200,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 		}
 
 		tok, err := FromHuggingFace("bert-base-uncased",
+			WithHFBaseURL(mockServer.URL),
 			WithHFCacheDir(tempDir),
 			WithHFTimeout(5*time.Second),
 		)
@@ -226,6 +225,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 		}
 
 		tok, err := FromHuggingFace("private-model",
+			WithHFBaseURL(mockServer.URL),
 			WithHFToken("test-token"),
 			WithHFCacheDir(tempDir),
 		)
@@ -240,6 +240,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 
 	t.Run("Model not found", func(t *testing.T) {
 		_, err := FromHuggingFace("not-found-model",
+			WithHFBaseURL(mockServer.URL),
 			WithHFCacheDir(tempDir),
 		)
 		require.Error(t, err)
@@ -248,6 +249,7 @@ func TestFromHuggingFaceWithMockServer(t *testing.T) {
 
 	t.Run("Rate limited", func(t *testing.T) {
 		_, err := FromHuggingFace("rate-limited",
+			WithHFBaseURL(mockServer.URL),
 			WithHFCacheDir(tempDir),
 		)
 		require.Error(t, err)
@@ -268,11 +270,34 @@ func TestHFConfigOptions(t *testing.T) {
 	err = WithHFRevision("v2.0")(tok)
 	assert.NoError(t, err)
 	assert.Equal(t, "v2.0", tok.hfConfig.Revision)
+	err = WithHFRevision("../bad")(tok)
+	assert.EqualError(t, err, "revision contains forbidden path segment")
+	err = WithHFRevision("refs\\\\bad")(tok)
+	assert.EqualError(t, err, "revision cannot contain backslashes")
 
 	// Test WithHFCacheDir
 	err = WithHFCacheDir("/custom/dir")(tok)
 	assert.NoError(t, err)
 	assert.Equal(t, "/custom/dir", tok.hfConfig.CacheDir)
+
+	// Test WithHFBaseURL
+	err = WithHFBaseURL("  https://example.test/  ")(tok)
+	assert.NoError(t, err)
+	assert.Equal(t, "https://example.test", tok.hfConfig.GetBaseURL())
+
+	err = WithHFBaseURL("   ")(tok)
+	assert.EqualError(t, err, "base URL cannot be empty")
+	err = WithHFBaseURL("not-a-url")(tok)
+	assert.EqualError(t, err, "base URL must be a valid absolute URL")
+	err = WithHFBaseURL("ftp://example.test")(tok)
+	assert.EqualError(t, err, "base URL scheme must be http or https")
+
+	// Ensure WithHFBaseURL initializes HF config when nil
+	tok2 := &Tokenizer{}
+	err = WithHFBaseURL("https://mirror.example.com")(tok2)
+	assert.NoError(t, err)
+	assert.NotNil(t, tok2.hfConfig)
+	assert.Equal(t, "https://mirror.example.com", tok2.hfConfig.GetBaseURL())
 
 	// Test WithHFTimeout
 	err = WithHFTimeout(10 * time.Second)(tok)
@@ -528,12 +553,8 @@ func TestDownloadWithRetry(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -634,12 +655,8 @@ func TestConcurrentDownloads(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
@@ -721,17 +738,13 @@ func TestConnectionReuse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Override base URL to use test server
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	// Reset HTTP client to ensure we're testing fresh
 	hfHTTPClient = nil
 	hfClientOnce = sync.Once{}
 
 	// Initialize client with test TLS config that accepts test certificates
 	config := &HFConfig{
+		baseURL:    server.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 1,
 		Revision:   "main",
@@ -772,10 +785,10 @@ func TestConnectionReuse(t *testing.T) {
 
 func TestParseRetryAfter(t *testing.T) {
 	testCases := []struct {
-		name         string
-		value        string
-		expectedMin  time.Duration
-		expectedMax  time.Duration
+		name        string
+		value       string
+		expectedMin time.Duration
+		expectedMax time.Duration
 	}{
 		{
 			name:        "Seconds value",
@@ -793,12 +806,12 @@ func TestParseRetryAfter(t *testing.T) {
 			name: "HTTP date in future",
 			// We'll calculate this dynamically
 			value:       time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat),
-			expectedMin: 29 * time.Second,  // Allow 1 second tolerance
+			expectedMin: 29 * time.Second, // Allow 1 second tolerance
 			expectedMax: 31 * time.Second,
 		},
 		{
-			name: "HTTP date in past",
-			value: time.Now().Add(-30 * time.Second).UTC().Format(http.TimeFormat),
+			name:        "HTTP date in past",
+			value:       time.Now().Add(-30 * time.Second).UTC().Format(http.TimeFormat),
 			expectedMin: 0,
 			expectedMax: 0,
 		},
@@ -815,7 +828,7 @@ func TestParseRetryAfter(t *testing.T) {
 			expectedMax: HFMaxRetryAfterDelay,
 		},
 		{
-			name: "Excessive HTTP date - should be capped",
+			name:        "Excessive HTTP date - should be capped",
 			value:       time.Now().Add(10 * time.Hour).UTC().Format(http.TimeFormat),
 			expectedMin: HFMaxRetryAfterDelay,
 			expectedMax: HFMaxRetryAfterDelay,
@@ -869,12 +882,8 @@ func TestRetryAfterHeader(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -916,12 +925,8 @@ func TestRetryAfterWithHTTPDate(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",
@@ -969,12 +974,8 @@ func TestFallbackToExponentialBackoff(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	// Override the base URL
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = mockServer.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	config := &HFConfig{
+		baseURL:    mockServer.URL,
 		Timeout:    5 * time.Second,
 		MaxRetries: 3,
 		Revision:   "main",

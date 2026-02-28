@@ -31,6 +31,9 @@ const (
 	ReleasesProject = "pure-tokenizers"
 	DefaultTag      = "latest"
 	DownloadTimeout = 30 * time.Second
+	// MaxSharedLibrarySize limits extracted shared library size to 200MB.
+	// This prevents decompression bomb style archives from exhausting disk/memory.
+	MaxSharedLibrarySize = 200 * 1024 * 1024
 	// gitHubReleasesPageSize is the number of releases fetched per API page.
 	gitHubReleasesPageSize = 100
 	// gitHubReleasesMaxPages bounds pagination while still covering large histories.
@@ -123,7 +126,7 @@ func downloadFile(url, dest string) error {
 		return fmt.Errorf("download failed with status %d: %s (%s)", resp.StatusCode, resp.Status, url)
 	}
 
-	out, err := os.Create(dest)
+	out, err := os.Create(dest) // #nosec G304 -- destination path is intentionally caller-controlled output location.
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", dest, err)
 	}
@@ -200,7 +203,7 @@ func verifyChecksum(filePath, checksumData string) error {
 	}
 
 	// Calculate actual checksum
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) // #nosec G304 -- filePath points to a downloaded temp artifact selected by internal flow.
 	if err != nil {
 		return fmt.Errorf("failed to open file for checksum: %w", err)
 	}
@@ -224,7 +227,7 @@ func verifyChecksum(filePath, checksumData string) error {
 
 // extractLibrary extracts the shared library from the tar.gz archive
 func extractLibrary(archivePath, destPath string) error {
-	file, err := os.Open(archivePath)
+	file, err := os.Open(archivePath) // #nosec G304 -- archivePath is generated internally in a controlled temp directory.
 	if err != nil {
 		return fmt.Errorf("failed to open archive: %w", err)
 	}
@@ -255,7 +258,7 @@ func extractLibrary(archivePath, destPath string) error {
 		// Look for the library file (could be in subdirectories)
 		if strings.HasSuffix(header.Name, libraryName) {
 			// Extract this file to the destination
-			outFile, err := os.Create(destPath)
+			outFile, err := os.Create(destPath) // #nosec G304 -- destPath is explicit caller-provided output path.
 			if err != nil {
 				return fmt.Errorf("failed to create output file: %w", err)
 			}
@@ -263,11 +266,20 @@ func extractLibrary(archivePath, destPath string) error {
 				_ = outFile.Close()
 			}()
 
-			if _, err := io.Copy(outFile, tr); err != nil {
+			if header.Size <= 0 || header.Size > MaxSharedLibrarySize {
+				return fmt.Errorf(
+					"archive entry %s has unsupported size %d (max %d)",
+					header.Name,
+					header.Size,
+					MaxSharedLibrarySize,
+				)
+			}
+			if _, err := io.CopyN(outFile, tr, header.Size); err != nil {
 				return fmt.Errorf("failed to extract library: %w", err)
 			}
 
 			// Make the library executable
+			// #nosec G302 -- shared libraries require execute permissions to be loadable.
 			if err := os.Chmod(destPath, 0755); err != nil {
 				return fmt.Errorf("failed to set library permissions: %w", err)
 			}
@@ -423,7 +435,7 @@ func resolveChecksumsURL(version string, idx *releaseIndex) (string, error) {
 }
 
 func libraryABIFingerprint(path string) (string, error) {
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) // #nosec G703 -- path comes from controlled cache resolution and explicit user library overrides.
 	if err != nil {
 		return "", err
 	}
@@ -487,7 +499,7 @@ func DownloadLibraryFromGitHubWithVersion(destPath, version string) error {
 
 	// Ensure destination directory exists
 	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
@@ -576,7 +588,7 @@ func downloadAndExtractLibraryFromReleases(version, checksumsURL, destPath strin
 		return fmt.Errorf("failed to download checksums from %s: %w", checksumsURL, err)
 	}
 
-	checksumData, err := os.ReadFile(tempChecksums)
+	checksumData, err := os.ReadFile(tempChecksums) // #nosec G304 -- tempChecksums is created in a controlled temp directory.
 	if err != nil {
 		return fmt.Errorf("failed to read checksums file: %w", err)
 	}
@@ -604,7 +616,7 @@ func downloadAndExtractLibraryFromReleases(version, checksumsURL, destPath strin
 				dlErr,
 			)
 		}
-		perAssetChecksumData, readErr := os.ReadFile(tempPerAssetChecksum)
+		perAssetChecksumData, readErr := os.ReadFile(tempPerAssetChecksum) // #nosec G304 -- temp checksum file path is controlled and local.
 		if readErr != nil {
 			return fmt.Errorf("failed to read fallback checksum file: %w", readErr)
 		}
@@ -667,7 +679,7 @@ func downloadAndExtractLibraryFromGitHub(release *gitHubRelease, destPath string
 			return fmt.Errorf("failed to download SHA256SUMS from GitHub release %s: %w", release.TagName, err)
 		}
 
-		checksumData, err := os.ReadFile(tempChecksums)
+		checksumData, err := os.ReadFile(tempChecksums) // #nosec G304 -- tempChecksums is created in a controlled temp directory.
 		if err != nil {
 			return fmt.Errorf("failed to read GitHub SHA256SUMS: %w", err)
 		}
@@ -694,7 +706,7 @@ func downloadAndExtractLibraryFromGitHub(release *gitHubRelease, destPath string
 		if err := downloadFile(perAssetChecksumURL, tempPerAssetChecksum); err != nil {
 			return fmt.Errorf("failed to download per-asset checksum from GitHub release %s: %w", release.TagName, err)
 		}
-		perAssetChecksumData, err := os.ReadFile(tempPerAssetChecksum)
+		perAssetChecksumData, err := os.ReadFile(tempPerAssetChecksum) // #nosec G304 -- temp checksum file path is controlled and local.
 		if err != nil {
 			return fmt.Errorf("failed to read per-asset checksum file: %w", err)
 		}

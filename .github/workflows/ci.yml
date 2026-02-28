@@ -167,10 +167,15 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
+  go-security:
+    uses: ./.github/workflows/go-security.yml
+    with:
+      go-version: '1.24'
+
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [rust-test, go-test]
+    needs: [rust-test, go-test, go-security]
 
     steps:
     - name: Checkout code

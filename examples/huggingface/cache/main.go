@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tokenizers "github.com/amikos-tech/pure-tokenizers"
@@ -58,7 +59,9 @@ func downloadAndCache() error {
 	if err != nil {
 		return fmt.Errorf("failed to download model: %w", err)
 	}
-	tokenizer1.Close()
+	if err := tokenizer1.Close(); err != nil {
+		return fmt.Errorf("failed to close tokenizer after initial download: %w", err)
+	}
 
 	downloadTime := time.Since(start)
 	fmt.Printf("  Download completed in %v\n", downloadTime)
@@ -169,7 +172,9 @@ func offlineMode() error {
 	if err != nil {
 		return fmt.Errorf("failed to cache model: %w", err)
 	}
-	tokenizer1.Close()
+	if err := tokenizer1.Close(); err != nil {
+		return fmt.Errorf("failed to close tokenizer after cache warmup: %w", err)
+	}
 	fmt.Printf("  Model cached successfully\n")
 
 	// Now try offline mode
@@ -215,7 +220,9 @@ func clearModelCache() error {
 		if err != nil {
 			return fmt.Errorf("failed to download model: %w", err)
 		}
-		tok.Close()
+		if err := tok.Close(); err != nil {
+			return fmt.Errorf("failed to close tokenizer for %s: %w", modelID, err)
+		}
 
 		info, _ = tokenizers.GetHFCacheInfo(modelID)
 	}
@@ -271,7 +278,9 @@ func clearCachePatterns() error {
 			fmt.Printf("  Skipping %s: %v\n", model, err)
 			continue
 		}
-		tok.Close()
+		if err := tok.Close(); err != nil {
+			fmt.Printf("  Warning: failed to close tokenizer for %s: %v\n", model, err)
+		}
 		fmt.Printf("  ✓ %s cached\n", model)
 	}
 	fmt.Println()
@@ -295,8 +304,8 @@ func clearCachePatterns() error {
 	// Example 3: Show wildcard matching
 	fmt.Println("Pattern matching examples:")
 	patterns := []string{
-		"*",        // All models
-		"*/*",      // All organization-prefixed models (e.g., huggingface/*)
+		"*",           // All models
+		"*/*",         // All organization-prefixed models (e.g., huggingface/*)
 		"bert-?ase-*", // bert-base-*, bert-case-* (using ? for single char)
 	}
 
@@ -319,8 +328,8 @@ func clearCachePatterns() error {
 	// Security demonstration
 	fmt.Println("Security features:")
 	insecurePatterns := []string{
-		"../etc/passwd",   // Directory traversal
-		"/absolute/path",  // Absolute path
+		"../etc/passwd",  // Directory traversal
+		"/absolute/path", // Absolute path
 	}
 
 	for _, pattern := range insecurePatterns {

@@ -18,7 +18,7 @@ import (
 func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 	// Priority 1: User-provided path
 	if userPath != "" {
-		if _, err := os.Stat(userPath); err == nil {
+		if _, err := os.Stat(userPath); err == nil { // #nosec G703 -- userPath is an explicit caller-supplied library override.
 			libh, err := loadLibrary(userPath)
 			if err != nil {
 				return 0, errors.Wrapf(err, "failed to load library from user-provided path: %s", userPath)
@@ -39,7 +39,7 @@ func LoadTokenizerLibrary(userPath string) (uintptr, error) {
 
 	// Priority 2: Environment variable
 	if envPath := os.Getenv("TOKENIZERS_LIB_PATH"); envPath != "" {
-		if _, err := os.Stat(envPath); err == nil {
+		if _, err := os.Stat(envPath); err == nil { // #nosec G703 -- TOKENIZERS_LIB_PATH is an intentional user-controlled override.
 			libh, err := loadLibrary(envPath)
 			if err != nil {
 				return 0, errors.Wrapf(err, "failed to load library from TOKENIZERS_LIB_PATH: %s", envPath)

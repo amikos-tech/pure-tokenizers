@@ -134,7 +134,9 @@ func loadOffline() error {
 	if err != nil {
 		return fmt.Errorf("failed to download model: %w", err)
 	}
-	tok1.Close()
+	if err := tok1.Close(); err != nil {
+		return fmt.Errorf("failed to close tokenizer after initial download: %w", err)
+	}
 
 	// Now load in offline mode (no network access)
 	tok2, err := tokenizers.FromHuggingFace(modelID,

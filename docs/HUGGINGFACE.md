@@ -290,6 +290,10 @@ Tokenizers are cached in platform-specific directories for optimal performance:
 - **Linux**: `~/.cache/tokenizers/lib/hf/models/` or `$XDG_CACHE_HOME/tokenizers/lib/hf/models/`
 - **Windows**: `%APPDATA%/tokenizers/lib/hf/models/`
 
+#### Cache Permissions
+- HuggingFace cache directories are created with `0750` permissions.
+- Cached `tokenizer.json` files are written with `0600` (owner read/write only).
+
 #### Cache Structure
 ```
 ~/.cache/tokenizers/lib/hf/models/

@@ -22,19 +22,19 @@ import (
 // Test configuration constants
 const (
 	// Timeout constants
-	defaultTestTimeout      = 5 * time.Second
-	shortTestTimeout        = 2 * time.Second
-	veryShortTestTimeout    = 100 * time.Millisecond
-	longTestTimeout         = 10 * time.Second
+	defaultTestTimeout   = 5 * time.Second
+	shortTestTimeout     = 2 * time.Second
+	veryShortTestTimeout = 100 * time.Millisecond
+	longTestTimeout      = 10 * time.Second
 
 	// Retry constants
-	defaultMaxRetries       = 3
-	shortMaxRetries         = 1
-	mediumMaxRetries        = 2
+	defaultMaxRetries = 3
+	shortMaxRetries   = 1
+	mediumMaxRetries  = 2
 
 	// Network simulation constants
-	slowResponseChunkSize   = 10  // bytes per chunk for slow response simulation
-	slowResponseChunkDelay  = 50 * time.Millisecond
+	slowResponseChunkSize  = 10 // bytes per chunk for slow response simulation
+	slowResponseChunkDelay = 50 * time.Millisecond
 )
 
 // TestingHelper is a minimal interface that both testing.T and testing.B satisfy
@@ -49,31 +49,31 @@ type TestingHelper interface {
 type FailureMode string
 
 const (
-	FailureModeNone                FailureMode = "none"
-	FailureModeTimeout             FailureMode = "timeout"
-	FailureModeConnectionReset     FailureMode = "connection_reset"
-	FailureModeSlowResponse        FailureMode = "slow_response"
-	FailureModePartialResponse     FailureMode = "partial_response"
-	FailureModeInvalidJSON         FailureMode = "invalid_json"
-	FailureModeTruncatedJSON       FailureMode = "truncated_json"
-	FailureModeServerError         FailureMode = "server_error"
-	FailureModeRateLimit           FailureMode = "rate_limit"
-	FailureModeAuthFailure         FailureMode = "auth_failure"
+	FailureModeNone                  FailureMode = "none"
+	FailureModeTimeout               FailureMode = "timeout"
+	FailureModeConnectionReset       FailureMode = "connection_reset"
+	FailureModeSlowResponse          FailureMode = "slow_response"
+	FailureModePartialResponse       FailureMode = "partial_response"
+	FailureModeInvalidJSON           FailureMode = "invalid_json"
+	FailureModeTruncatedJSON         FailureMode = "truncated_json"
+	FailureModeServerError           FailureMode = "server_error"
+	FailureModeRateLimit             FailureMode = "rate_limit"
+	FailureModeAuthFailure           FailureMode = "auth_failure"
 	FailureModeContentLengthMismatch FailureMode = "content_length_mismatch"
-	FailureModeExcessiveSize       FailureMode = "excessive_size"
+	FailureModeExcessiveSize         FailureMode = "excessive_size"
 )
 
 // FailureInjectionServer provides a configurable mock server for testing failure scenarios
 type FailureInjectionServer struct {
 	*httptest.Server
-	failureMode      FailureMode
-	failureCount     int32
-	requestCount     int32
-	retryAfterValue  string
-	responseDelay    time.Duration
-	statusCode       int
-	mu               sync.RWMutex
-	tokenizer        []byte
+	failureMode     FailureMode
+	failureCount    int32
+	requestCount    int32
+	retryAfterValue string
+	responseDelay   time.Duration
+	statusCode      int
+	mu              sync.RWMutex
+	tokenizer       []byte
 }
 
 // NewFailureInjectionServer creates a new server with configurable failure modes
@@ -266,10 +266,6 @@ func (fis *FailureInjectionServer) injectFailure(w http.ResponseWriter, r *http.
 func TestNetworkTimeouts(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Connection timeout", func(t *testing.T) {
@@ -278,6 +274,7 @@ func TestNetworkTimeouts(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    veryShortTestTimeout,
@@ -299,6 +296,7 @@ func TestNetworkTimeouts(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    200 * time.Millisecond,
@@ -315,6 +313,7 @@ func TestNetworkTimeouts(t *testing.T) {
 		server.SetResponseDelay(2 * time.Second)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    veryShortTestTimeout,
@@ -330,15 +329,11 @@ func TestNetworkTimeouts(t *testing.T) {
 func TestHTTPErrorCodes(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	testCases := []struct {
-		name       string
-		statusCode int
+		name        string
+		statusCode  int
 		shouldRetry bool
 	}{
 		{"500 Internal Server Error", http.StatusInternalServerError, true},
@@ -365,6 +360,7 @@ func TestHTTPErrorCodes(t *testing.T) {
 			}
 
 			config := &HFConfig{
+				baseURL:    server.URL,
 				Revision:   "main",
 				CacheDir:   tempDir,
 				Timeout:    shortTestTimeout,
@@ -391,10 +387,6 @@ func TestHTTPErrorCodes(t *testing.T) {
 func TestRateLimiting(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Rate limit with integer Retry-After", func(t *testing.T) {
@@ -404,6 +396,7 @@ func TestRateLimiting(t *testing.T) {
 		server.SetFailureCount(2)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    longTestTimeout,
@@ -430,6 +423,7 @@ func TestRateLimiting(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    longTestTimeout,
@@ -451,6 +445,7 @@ func TestRateLimiting(t *testing.T) {
 		server.SetFailureCount(10) // More than max retries
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    longTestTimeout,
@@ -469,6 +464,7 @@ func TestRateLimiting(t *testing.T) {
 		server.SetFailureCount(2)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    longTestTimeout,
@@ -486,11 +482,11 @@ func TestRateLimiting(t *testing.T) {
 			value    string
 			expected time.Duration
 		}{
-			{"3600", HFMaxRetryAfterDelay},    // 1 hour -> capped
-			{"10000", HFMaxRetryAfterDelay},   // Very large -> capped
-			{"300", HFMaxRetryAfterDelay},     // 5 minutes -> exactly at cap
-			{"299", 299 * time.Second},        // Just under cap -> not capped
-			{"60", 60 * time.Second},          // 1 minute -> not capped
+			{"3600", HFMaxRetryAfterDelay},  // 1 hour -> capped
+			{"10000", HFMaxRetryAfterDelay}, // Very large -> capped
+			{"300", HFMaxRetryAfterDelay},   // 5 minutes -> exactly at cap
+			{"299", 299 * time.Second},      // Just under cap -> not capped
+			{"60", 60 * time.Second},        // 1 minute -> not capped
 		}
 
 		for _, tc := range testCases {
@@ -505,10 +501,6 @@ func TestRateLimiting(t *testing.T) {
 func TestPartialAndCorruptedResponses(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Partial response - connection drop", func(t *testing.T) {
@@ -517,6 +509,7 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -533,6 +526,7 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -550,6 +544,7 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -566,6 +561,7 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 		server.SetFailureCount(2)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -583,10 +579,6 @@ func TestPartialAndCorruptedResponses(t *testing.T) {
 func TestContentLengthValidation(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Excessive file size rejected", func(t *testing.T) {
@@ -595,6 +587,7 @@ func TestContentLengthValidation(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:          server.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          defaultTestTimeout,
@@ -613,6 +606,7 @@ func TestContentLengthValidation(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:          server.URL,
 			Revision:         "main",
 			CacheDir:         tempDir,
 			Timeout:          defaultTestTimeout,
@@ -631,6 +625,7 @@ func TestContentLengthValidation(t *testing.T) {
 		server.SetFailureCount(1)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -652,10 +647,6 @@ func TestContentLengthValidation(t *testing.T) {
 func TestAuthenticationFailures(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Missing authentication", func(t *testing.T) {
@@ -664,6 +655,7 @@ func TestAuthenticationFailures(t *testing.T) {
 		server.SetFailureCount(10)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -684,6 +676,7 @@ func TestAuthenticationFailures(t *testing.T) {
 		server.SetFailureCount(10)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -707,10 +700,6 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Concurrent downloads with intermittent failures", func(t *testing.T) {
@@ -728,6 +717,7 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				config := &HFConfig{
+					baseURL:    server.URL,
 					Revision:   "main",
 					CacheDir:   filepath.Join(tempDir, fmt.Sprintf("cache-%d", id)),
 					Timeout:    defaultTestTimeout,
@@ -763,10 +753,6 @@ func TestConcurrentDownloadFailures(t *testing.T) {
 func TestSlowNetworkConditions(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Slow but successful download", func(t *testing.T) {
@@ -775,6 +761,7 @@ func TestSlowNetworkConditions(t *testing.T) {
 		server.SetResponseDelay(500 * time.Millisecond)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    shortTestTimeout,
@@ -796,6 +783,7 @@ func TestSlowNetworkConditions(t *testing.T) {
 		server.SetResponseDelay(2 * time.Second)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    500 * time.Millisecond,
@@ -811,10 +799,6 @@ func TestSlowNetworkConditions(t *testing.T) {
 func TestConnectionResetScenarios(t *testing.T) {
 	server := NewFailureInjectionServer(t)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
-
 	tempDir := t.TempDir()
 
 	t.Run("Connection reset with retry", func(t *testing.T) {
@@ -823,6 +807,7 @@ func TestConnectionResetScenarios(t *testing.T) {
 		server.SetFailureCount(2)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -839,10 +824,6 @@ func TestConnectionResetScenarios(t *testing.T) {
 // TestCacheCorruptionWithDownload tests cache corruption scenarios
 func TestCacheCorruptionWithDownload(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
 
 	tempDir := t.TempDir()
 
@@ -866,6 +847,7 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 
 		// Download should succeed
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    defaultTestTimeout,
@@ -891,6 +873,7 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		defer func() { _ = os.Chmod(readOnlyDir, 0755) }()
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   readOnlyDir,
 			Timeout:    defaultTestTimeout,
@@ -918,6 +901,7 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 		require.NoError(t, err)
 
 		config := &HFConfig{
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   writableDir,
 			Timeout:    defaultTestTimeout,
@@ -946,10 +930,6 @@ func TestCacheCorruptionWithDownload(t *testing.T) {
 func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 	server := NewFailureInjectionServer(b)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	b.Cleanup(func() { HFHubBaseURL = originalURL })
-
 	tempDir := b.TempDir()
 
 	// Set up intermittent failures (fail every 3rd request)
@@ -957,6 +937,7 @@ func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 	server.SetStatusCode(http.StatusInternalServerError)
 
 	config := &HFConfig{
+		baseURL:    server.URL,
 		Revision:   "main",
 		CacheDir:   tempDir,
 		Timeout:    defaultTestTimeout,
@@ -981,10 +962,6 @@ func BenchmarkDownloadWithFailureRecovery(b *testing.B) {
 func BenchmarkConcurrentDownloadsWithFailures(b *testing.B) {
 	server := NewFailureInjectionServer(b)
 
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	b.Cleanup(func() { HFHubBaseURL = originalURL })
-
 	tempDir := b.TempDir()
 
 	server.SetFailureMode(FailureModeServerError)
@@ -992,6 +969,7 @@ func BenchmarkConcurrentDownloadsWithFailures(b *testing.B) {
 	server.SetFailureCount(int32(b.N / 4)) // 25% failure rate
 
 	config := &HFConfig{
+		baseURL:    server.URL,
 		Revision:   "main",
 		CacheDir:   tempDir,
 		Timeout:    defaultTestTimeout,
@@ -1015,12 +993,8 @@ func TestDialerFailures(t *testing.T) {
 	tempDir := t.TempDir()
 
 	t.Run("Connection refused", func(t *testing.T) {
-		// Use a closed port
-		originalURL := HFHubBaseURL
-		HFHubBaseURL = "http://localhost:9999"
-		defer func() { HFHubBaseURL = originalURL }()
-
 		config := &HFConfig{
+			baseURL:    "http://localhost:9999",
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    1 * time.Second,
@@ -1033,11 +1007,8 @@ func TestDialerFailures(t *testing.T) {
 	})
 
 	t.Run("Invalid hostname", func(t *testing.T) {
-		originalURL := HFHubBaseURL
-		HFHubBaseURL = "http://this-domain-does-not-exist-12345.invalid"
-		defer func() { HFHubBaseURL = originalURL }()
-
 		config := &HFConfig{
+			baseURL:    "http://this-domain-does-not-exist-12345.invalid",
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    shortTestTimeout,
@@ -1094,7 +1065,7 @@ func TestContextCancellation(t *testing.T) {
 		tempDir := t.TempDir()
 
 		config := &HFConfig{
-			BaseURL:    server.URL,
+			baseURL:    server.URL,
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    shortTestTimeout,
@@ -1128,10 +1099,6 @@ func TestContextCancellation(t *testing.T) {
 // TestErrorMessageQuality verifies that error messages are helpful for debugging
 func TestErrorMessageQuality(t *testing.T) {
 	server := NewFailureInjectionServer(t)
-
-	originalURL := HFHubBaseURL
-	HFHubBaseURL = server.URL
-	defer func() { HFHubBaseURL = originalURL }()
 
 	tempDir := t.TempDir()
 
@@ -1175,6 +1142,7 @@ func TestErrorMessageQuality(t *testing.T) {
 			server.SetFailureCount(10)
 
 			config := &HFConfig{
+				baseURL:    server.URL,
 				Revision:   "main",
 				CacheDir:   tempDir,
 				Timeout:    shortTestTimeout,
@@ -1198,11 +1166,8 @@ func TestDNSFailures(t *testing.T) {
 	tempDir := t.TempDir()
 
 	t.Run("DNS resolution failure", func(t *testing.T) {
-		originalURL := HFHubBaseURL
-		HFHubBaseURL = "http://invalid.example.invalid"
-		defer func() { HFHubBaseURL = originalURL }()
-
 		config := &HFConfig{
+			baseURL:    "http://invalid.example.invalid",
 			Revision:   "main",
 			CacheDir:   tempDir,
 			Timeout:    shortTestTimeout,
@@ -1217,8 +1182,8 @@ func TestDNSFailures(t *testing.T) {
 		var opErr *net.OpError
 		assert.True(t,
 			errors.As(err, &dnsErr) || errors.As(err, &opErr) ||
-			strings.Contains(strings.ToLower(err.Error()), "no such host") ||
-			strings.Contains(strings.ToLower(err.Error()), "request failed"),
+				strings.Contains(strings.ToLower(err.Error()), "no such host") ||
+				strings.Contains(strings.ToLower(err.Error()), "request failed"),
 			"Expected DNS or connection error, got: %v", err)
 	})
 }

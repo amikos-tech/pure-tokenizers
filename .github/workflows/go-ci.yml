@@ -8,6 +8,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/go-ci.yml'
+      - '.github/workflows/go-security.yml'
       - '.github/actions/**'
   pull_request:
     branches: [ main ]
@@ -16,6 +17,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/go-ci.yml'
+      - '.github/workflows/go-security.yml'
       - '.github/actions/**'
 
 permissions:
@@ -71,10 +73,15 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
+  go-security:
+    uses: ./.github/workflows/go-security.yml
+    with:
+      go-version: '1.24'
+
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: go-test
+    needs: [go-test, go-security]
 
     steps:
     - name: Checkout code
@@ -105,7 +112,7 @@ jobs:
   huggingface-integration:
     name: HuggingFace Integration Tests
     runs-on: ubuntu-latest
-    needs: go-test
+    needs: [go-test, go-security]
     # Only run on main branch or when PR has 'integration' label
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'integration')
 

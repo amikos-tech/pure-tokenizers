@@ -313,6 +313,9 @@ tokenizer, err := tokenizers.FromHuggingFace("bert-base-uncased",
     tokenizers.WithHFOfflineMode(true))
 ```
 
+HuggingFace cache directories are created with `0750` permissions, and cached
+`tokenizer.json` files are written with `0600` (owner read/write only).
+
 ## Platform Support
 
 | Platform | Architecture | Binary | Status |
@@ -346,6 +349,20 @@ make test
 # Run linting
 make lint-fix      # Go linting
 make lint-rust     # Rust linting
+
+# Run security checks
+make security-go   # go vet + govulncheck + gosec
+```
+
+### Security Checks
+
+```bash
+# Run all Go security checks locally
+make security-go
+
+# Install and enable git hooks (lefthook)
+go install github.com/evilmartians/lefthook@latest
+lefthook install
 ```
 
 ### Testing

@@ -2,28 +2,35 @@ package tokenizers
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
+	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
 )
 
 const (
-	HFDefaultRevision = "main"
-	HFDefaultTimeout  = 30 * time.Second
-	HFMaxRetries      = 3
-	HFRetryDelay      = time.Second
+	HFDefaultRevision   = "main"
+	HFDefaultTimeout    = 30 * time.Second
+	HFMaxRetries        = 3
+	HFRetryDelay        = time.Second
+	hfDefaultHubBaseURL = "https://huggingface.co"
+	// Deprecated: HFHubBaseURL is immutable for backward compatibility.
+	// Use WithHFBaseURL to override the endpoint per tokenizer instance.
+	HFHubBaseURL = hfDefaultHubBaseURL
 	// HFMaxRetryAfterDelay caps the maximum delay from Retry-After headers
 	// to prevent excessive waits from misconfigured or malicious servers
 	HFMaxRetryAfterDelay = 5 * time.Minute
@@ -44,12 +51,12 @@ const (
 )
 
 var (
-	HFHubBaseURL   = "https://huggingface.co" // Variable to allow testing with mock server
-	libraryVersion = "0.1.0"                  // Default version, will be set from library if available
+	libraryVersion = "0.1.0" // Default version, will be set from library if available
 
 	// Shared HTTP client for HuggingFace downloads with connection pooling
 	hfHTTPClient *http.Client
 	hfClientOnce sync.Once
+	jitterNonce  atomic.Int64
 
 	// ErrCacheNotFound is returned when a requested cache file does not exist
 	ErrCacheNotFound = errors.New("cache file not found")
@@ -76,8 +83,9 @@ func getEnvIntValue[T int | int64](key string, defaultValue T, parser func(strin
 
 	val, err := parser(envVal)
 	if err != nil {
+		// #nosec G706 -- key/envVal are sanitized before logging.
 		log.Printf("[WARNING] Invalid integer value for %s: '%s' (error: %v), using default: %v\n",
-			key, envVal, err, defaultValue)
+			sanitizeLogValue(key), sanitizeLogValue(envVal), err, defaultValue)
 		return defaultValue
 	}
 
@@ -88,6 +96,12 @@ func getEnvIntValue[T int | int64](key string, defaultValue T, parser func(strin
 	}
 
 	return val
+}
+
+func sanitizeLogValue(v string) string {
+	v = strings.ReplaceAll(v, "\n", "\\n")
+	v = strings.ReplaceAll(v, "\r", "\\r")
+	return v
 }
 
 // getEnvInt retrieves an integer value from environment variable
@@ -111,12 +125,14 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 			return val
 		} else if err != nil {
 			// Always log warning for invalid configuration to help users debug
+			// #nosec G706 -- key/envVal are sanitized before logging.
 			log.Printf("[WARNING] Invalid duration value for %s: '%s' (error: %v), using default: %v\n",
-				key, envVal, err, defaultValue)
+				sanitizeLogValue(key), sanitizeLogValue(envVal), err, defaultValue)
 		} else if val <= 0 {
 			// Log warning for non-positive durations
+			// #nosec G706 -- key is sanitized before logging.
 			log.Printf("[WARNING] Non-positive duration for %s: %v, using default: %v\n",
-				key, val, defaultValue)
+				sanitizeLogValue(key), val, defaultValue)
 		}
 	}
 	return defaultValue
@@ -243,9 +259,7 @@ type HFConfig struct {
 	// or DefaultMaxTokenizerSize (500MB) if the environment variable is not set.
 	// Use WithHFMaxTokenizerSize to explicitly set this value.
 	MaxTokenizerSize int64
-	// BaseURL is the base URL for HuggingFace Hub API (defaults to HFHubBaseURL if empty)
-	// This is primarily used for testing with mock servers
-	BaseURL string
+	baseURL          string
 
 	// HTTP client pooling configuration
 	// These settings control connection reuse for improved performance.
@@ -270,6 +284,56 @@ type HFConfig struct {
 	HTTPMaxIdleConns        int           // Maximum idle connections across all hosts (env: HF_HTTP_MAX_IDLE_CONNS, default: 100, max: 1000)
 	HTTPMaxIdleConnsPerHost int           // Maximum idle connections per host (env: HF_HTTP_MAX_IDLE_CONNS_PER_HOST, default: 10, max: 100)
 	HTTPIdleTimeout         time.Duration // How long to keep idle connections open (env: HF_HTTP_IDLE_TIMEOUT, default: 90s)
+}
+
+// SetBaseURL validates and sets a custom HuggingFace base URL.
+// Leading/trailing whitespace and trailing slashes are removed.
+func (c *HFConfig) SetBaseURL(baseURL string) error {
+	normalized, err := normalizeHFBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	c.baseURL = normalized
+	return nil
+}
+
+// GetBaseURL returns the configured custom HuggingFace base URL.
+// Returns an empty string when no custom URL is configured.
+func (c *HFConfig) GetBaseURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.baseURL
+}
+
+func normalizeHFBaseURL(baseURL string) (string, error) {
+	normalized := strings.TrimSpace(baseURL)
+	if normalized == "" {
+		return "", errors.New("base URL cannot be empty")
+	}
+	parsedURL, err := url.Parse(normalized)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to parse base URL")
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return "", errors.New("base URL must be a valid absolute URL")
+	}
+	scheme := strings.ToLower(parsedURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("base URL scheme must be http or https")
+	}
+	return strings.TrimRight(normalized, "/"), nil
+}
+
+func resolveHFBaseURL(config *HFConfig) (string, error) {
+	if config == nil || strings.TrimSpace(config.baseURL) == "" {
+		return hfDefaultHubBaseURL, nil
+	}
+	normalized, err := normalizeHFBaseURL(config.baseURL)
+	if err != nil {
+		return "", errors.Wrap(err, "invalid HF base URL configuration")
+	}
+	return normalized, nil
 }
 
 // FromHuggingFace loads a tokenizer from HuggingFace Hub using the model identifier.
@@ -322,6 +386,13 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 		}
 	}
 
+	if tokenizer.hfConfig.Revision == "" {
+		tokenizer.hfConfig.Revision = HFDefaultRevision
+	}
+	if err := validateHFRevision(tokenizer.hfConfig.Revision); err != nil {
+		return nil, errors.Wrap(err, "invalid HuggingFace revision")
+	}
+
 	// Get token from environment if not provided
 	if tokenizer.hfConfig.Token == "" {
 		tokenizer.hfConfig.Token = os.Getenv("HF_TOKEN")
@@ -343,7 +414,9 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 	if tokenizer.hfConfig.UseLocalCache {
 		if data, err := checkHFHubCache(modelID, tokenizer.hfConfig.Revision); err == nil {
 			// Save to our cache for faster future access
-			_ = saveToHFCache(cachedPath, data)
+			if cacheErr := saveToHFCache(cachedPath, data); cacheErr != nil {
+				log.Printf("[WARNING] Failed to save HuggingFace tokenizer cache at %s: %v", cachedPath, cacheErr)
+			}
 			return FromBytes(data, opts...)
 		}
 	}
@@ -361,9 +434,7 @@ func FromHuggingFace(modelID string, opts ...TokenizerOption) (*Tokenizer, error
 
 	// Save to cache
 	if err := saveToHFCache(cachedPath, data); err != nil {
-		// Log warning but don't fail
-		// In production, you might want to use a proper logger
-		_ = err
+		log.Printf("[WARNING] Failed to save HuggingFace tokenizer cache at %s: %v", cachedPath, err)
 	}
 
 	// Create tokenizer from downloaded data
@@ -384,10 +455,14 @@ func WithHFToken(token string) TokenizerOption {
 // WithHFRevision sets the model revision (branch, tag, or commit hash)
 func WithHFRevision(revision string) TokenizerOption {
 	return func(t *Tokenizer) error {
+		normalized := strings.TrimSpace(revision)
+		if err := validateHFRevision(normalized); err != nil {
+			return err
+		}
 		if t.hfConfig == nil {
 			t.hfConfig = &HFConfig{}
 		}
-		t.hfConfig.Revision = revision
+		t.hfConfig.Revision = normalized
 		return nil
 	}
 }
@@ -400,6 +475,18 @@ func WithHFCacheDir(dir string) TokenizerOption {
 		}
 		t.hfConfig.CacheDir = dir
 		return nil
+	}
+}
+
+// WithHFBaseURL sets a custom HuggingFace base URL.
+// This is primarily useful for tests and custom mirrors.
+// Leading/trailing whitespace and trailing slashes are removed.
+func WithHFBaseURL(baseURL string) TokenizerOption {
+	return func(t *Tokenizer) error {
+		if t.hfConfig == nil {
+			t.hfConfig = &HFConfig{}
+		}
+		return t.hfConfig.SetBaseURL(baseURL)
 	}
 }
 
@@ -445,11 +532,18 @@ func WithHFMaxTokenizerSize(maxSize int64) TokenizerOption {
 
 // downloadTokenizerFromHF downloads the tokenizer.json file from HuggingFace Hub
 func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
-	baseURL := config.BaseURL
-	if baseURL == "" {
-		baseURL = HFHubBaseURL
+	baseURL, err := resolveHFBaseURL(config)
+	if err != nil {
+		return nil, err
 	}
-	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", baseURL, modelID, config.Revision)
+	revision := strings.TrimSpace(config.Revision)
+	if revision == "" {
+		revision = HFDefaultRevision
+	}
+	if err := validateHFRevision(revision); err != nil {
+		return nil, errors.Wrap(err, "invalid HuggingFace revision")
+	}
+	url := fmt.Sprintf("%s/%s/resolve/%s/tokenizer.json", baseURL, modelID, revision)
 
 	var lastErr error
 	var retryAfterDuration time.Duration
@@ -468,9 +562,9 @@ func downloadTokenizerFromHF(modelID string, config *HFConfig) ([]byte, error) {
 				retryAfterDuration = 0
 			} else {
 				// Exponential backoff with jitter
-				baseDelay := HFRetryDelay * time.Duration(1<<uint(attempt-1))
+				baseDelay := HFRetryDelay * (1 << (attempt - 1))
 				// Add 0-25% jitter to prevent thundering herd
-				jitter := time.Duration(rand.Float64() * 0.25 * float64(baseDelay))
+				jitter := secureJitter(baseDelay)
 				delay = baseDelay + jitter
 				if os.Getenv("DEBUG") != "" {
 					log.Printf("[DEBUG] Retry attempt %d: using exponential backoff with jitter (base: %v, jitter: %v, total: %v)",
@@ -615,6 +709,9 @@ func validateModelID(modelID string) error {
 		if owner == "" {
 			return errors.New("owner cannot be empty")
 		}
+		if owner == "." || owner == ".." {
+			return errors.New("owner cannot be '.' or '..'")
+		}
 		// Owner follows same rules as repo_name
 		if len(owner) > 96 {
 			return errors.New("owner cannot exceed 96 characters")
@@ -629,6 +726,9 @@ func validateModelID(modelID string) error {
 	if repoName == "" {
 		return errors.New("repo_name cannot be empty")
 	}
+	if repoName == "." || repoName == ".." {
+		return errors.New("repo_name cannot be '.' or '..'")
+	}
 	if len(repoName) > 96 {
 		return errors.Errorf("repo_name cannot exceed 96 characters (got %d)", len(repoName))
 	}
@@ -636,6 +736,44 @@ func validateModelID(modelID string) error {
 		return errors.New("repo_name contains invalid characters (must match [\\w\\-.]{1,96})")
 	}
 
+	return nil
+}
+
+func validateHFRevision(revision string) error {
+	trimmed := strings.TrimSpace(revision)
+	if trimmed == "" {
+		return errors.New("revision cannot be empty")
+	}
+	if len(trimmed) > 128 {
+		return errors.Errorf("revision cannot exceed 128 characters (got %d)", len(trimmed))
+	}
+	if strings.Contains(trimmed, `\`) {
+		return errors.New("revision cannot contain backslashes")
+	}
+	if strings.HasPrefix(trimmed, "/") || strings.HasSuffix(trimmed, "/") {
+		return errors.New("revision cannot start or end with '/'")
+	}
+	if strings.Contains(trimmed, ":") {
+		return errors.New("revision cannot contain ':'")
+	}
+
+	parts := strings.Split(trimmed, "/")
+	for _, part := range parts {
+		if part == "" {
+			return errors.New("revision contains empty path segment")
+		}
+		if part == "." || part == ".." {
+			return errors.New("revision contains forbidden path segment")
+		}
+		for _, c := range part {
+			if !((c >= 'a' && c <= 'z') ||
+				(c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') ||
+				c == '_' || c == '-' || c == '.') {
+				return errors.New("revision contains invalid characters")
+			}
+		}
+	}
 	return nil
 }
 
@@ -667,8 +805,12 @@ func getHFCachePath(customCacheDir, modelID, revision string) string {
 
 	// Sanitize model ID for filesystem
 	sanitizedModelID := strings.ReplaceAll(modelID, "/", "--")
+	safeRevision := strings.TrimSpace(revision)
+	if safeRevision == "" || validateHFRevision(safeRevision) != nil {
+		safeRevision = HFDefaultRevision
+	}
 
-	return filepath.Join(cacheDir, "models", sanitizedModelID, revision, "tokenizer.json")
+	return filepath.Join(cacheDir, "models", sanitizedModelID, safeRevision, "tokenizer.json")
 }
 
 // getHFCacheDir returns the default HuggingFace cache directory
@@ -689,13 +831,13 @@ func getHFCacheDir() string {
 // saveToHFCache saves the tokenizer data to the cache with atomic write
 func saveToHFCache(path string, data []byte) error {
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return errors.Wrap(err, "failed to create cache directory")
 	}
 
 	// Use atomic write to prevent race conditions
 	tempPath := path + ".tmp" + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+	if err := os.WriteFile(tempPath, data, 0600); err != nil {
 		return errors.Wrap(err, "failed to write cache file")
 	}
 
@@ -728,6 +870,10 @@ func isNonRetryableError(err error) bool {
 
 // GetHFCacheInfo returns information about the HuggingFace cache for a model
 func GetHFCacheInfo(modelID string) (map[string]interface{}, error) {
+	if err := validateModelID(modelID); err != nil {
+		return nil, errors.Wrap(err, "invalid model ID")
+	}
+
 	info := make(map[string]interface{})
 	info["model_id"] = modelID
 
@@ -748,6 +894,10 @@ func GetHFCacheInfo(modelID string) (map[string]interface{}, error) {
 
 // ClearHFModelCache clears the cache for a specific model
 func ClearHFModelCache(modelID string) error {
+	if err := validateModelID(modelID); err != nil {
+		return errors.Wrap(err, "invalid model ID")
+	}
+
 	cacheDir := getHFCacheDir()
 	sanitizedModelID := strings.ReplaceAll(modelID, "/", "--")
 	modelCacheDir := filepath.Join(cacheDir, "models", sanitizedModelID)
@@ -887,8 +1037,34 @@ func parseRetryAfter(value string) time.Duration {
 	return duration
 }
 
+func secureJitter(baseDelay time.Duration) time.Duration {
+	maxJitter := baseDelay / 4
+	if maxJitter <= 0 {
+		return 0
+	}
+	limit := big.NewInt(maxJitter.Nanoseconds() + 1)
+	n, err := cryptorand.Int(cryptorand.Reader, limit)
+	if err != nil {
+		// Fallback mixes a monotonic counter with current time to preserve retry variance.
+		nonce := jitterNonce.Add(1)
+		now := time.Now().UnixNano()
+		mixed := now ^ nonce ^ (nonce << 13)
+		if mixed < 0 {
+			mixed = -mixed
+		}
+		return time.Duration(mixed % limit.Int64())
+	}
+	return time.Duration(n.Int64())
+}
+
 // checkHFHubCache checks if tokenizer exists in the standard HuggingFace hub cache
 func checkHFHubCache(modelID, revision string) ([]byte, error) {
+	if revision != "" {
+		if err := validateHFRevision(revision); err != nil {
+			return nil, errors.Wrap(err, "invalid HuggingFace revision")
+		}
+	}
+
 	// Get HuggingFace hub cache directory
 	hubCacheDir := getHFHubCacheDir()
 	if hubCacheDir == "" {
@@ -925,6 +1101,7 @@ func checkHFHubCache(modelID, revision string) ([]byte, error) {
 			if revision != "main" && revision != "" {
 				// Check if this snapshot matches the revision
 				refPath := filepath.Join(hubCacheDir, sanitizedModelID, "refs", revision)
+				// #nosec G304 -- refPath is built from a validated revision under the HF cache root.
 				if refData, err := os.ReadFile(refPath); err == nil {
 					refHash := strings.TrimSpace(string(refData))
 					if entry.Name() == refHash {
@@ -944,7 +1121,7 @@ func checkHFHubCache(modelID, revision string) ([]byte, error) {
 	}
 
 	// Read and validate the tokenizer
-	data, err := os.ReadFile(tokenizerPath)
+	data, err := os.ReadFile(tokenizerPath) // #nosec G304 -- tokenizerPath is discovered from entries under the HF cache snapshots directory.
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read tokenizer from HF hub cache")
 	}
@@ -998,7 +1175,7 @@ func loadFromCacheWithValidation(path string, ttl time.Duration) ([]byte, error)
 
 	// Read file (small race window remains between Stat and ReadFile, but acceptable
 	// for cache scenarios; full elimination would require OS-specific file locking).
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path points to a cache file from trusted internal cache path construction.
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read cache file")
 	}
