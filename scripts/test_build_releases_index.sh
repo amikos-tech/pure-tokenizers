@@ -30,6 +30,15 @@ assert_eq() {
   fi
 }
 
+assert_fails() {
+  local message="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    echo "Assertion failed: ${message}" >&2
+    exit 1
+  fi
+}
+
 run_builder() {
   local existing="$1"
   local output="$2"
@@ -47,6 +56,9 @@ missing_existing="${work_dir}/missing.json"
 out_missing="${work_dir}/out-missing.json"
 run_builder "$missing_existing" "$out_missing"
 assert_eq "$(jq -r '.releases | length' "$out_missing")" "1" "missing input should create one entry"
+assert_eq "$(jq -r '.releases[0].version' "$out_missing")" "v0.1.4" "missing input should use requested version"
+assert_eq "$(jq -r '.releases[0].prefix' "$out_missing")" "pure-tokenizers/v0.1.4/" "missing input should use normalized prefix"
+assert_eq "$(jq -r '.releases[0].checksums_url' "$out_missing")" "pure-tokenizers/v0.1.4/SHA256SUMS" "missing input should use expected checksums URL"
 
 # Case 2: malformed JSON -> fallback to empty
 malformed_existing="${work_dir}/malformed.json"
@@ -141,20 +153,29 @@ cat >"$bounded_existing" <<'EOF'
 EOF
 run_builder "$bounded_existing" "$out_bounded"
 assert_eq "$(jq -r '.releases | length' "$out_bounded")" "3" "max bound should cap index size"
+assert_eq "$(jq -r '.releases[0].version' "$out_bounded")" "v0.1.4" "newest release should be first"
+assert_eq "$(jq -r '.releases[1].version' "$out_bounded")" "v0.1.3" "second newest release should follow"
+assert_eq "$(jq -r '.releases[2].version' "$out_bounded")" "v0.1.2" "oldest retained release should be last"
 
 # Case 7: invalid --date should fail fast
 invalid_date_existing="${work_dir}/invalid-date.json"
 out_invalid_date="${work_dir}/out-invalid-date.json"
 echo '{"releases":[]}' >"$invalid_date_existing"
-if "${SCRIPT}" \
+assert_fails \
+  "invalid --date should fail." \
+  "${SCRIPT}" \
   --existing "$invalid_date_existing" \
   --output "$out_invalid_date" \
   --project pure-tokenizers \
   --version v0.1.4 \
   --date invalid-date \
-  --max 3 >/dev/null 2>&1; then
-  echo "Assertion failed: invalid --date should fail." >&2
-  exit 1
-fi
+  --max 3
+
+# Case 8: argument validation should fail on bad flags and values
+assert_fails "missing required args should fail." "${SCRIPT}" --output "$out_invalid_date"
+assert_fails "--max must reject zero." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --max 0
+assert_fails "--max must reject non-integers." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --max abc
+assert_fails "unknown flags should fail." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --unknown value
+assert_fails "trailing --max without value should fail." "${SCRIPT}" --output "$out_invalid_date" --project pure-tokenizers --version v0.1.4 --date 2026-03-01T00:00:00Z --max
 
 echo "All release index tests passed."
