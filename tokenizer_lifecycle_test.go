@@ -25,6 +25,28 @@ func TestCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, tok.Close())
 }
 
+func TestConcurrentCloseIsIdempotent(t *testing.T) {
+	tok := newLifecycleTestTokenizer(t)
+
+	const goroutines = 8
+	errs := make(chan error, goroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			errs <- tok.Close()
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
 func TestTokenizerMethodsReturnErrTokenizerClosed(t *testing.T) {
 	tok := newLifecycleTestTokenizer(t)
 
@@ -86,10 +108,82 @@ func TestConcurrentEncodeAndClose(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for j := 0; j < iterationsPerGoroutine; j++ {
-				_, err := tok.Encode("Concurrent lifecycle test text")
+				result, err := tok.Encode("Concurrent lifecycle test text")
 				if err != nil && !stderrors.Is(err, ErrTokenizerClosed) {
 					errs <- err
 					return
+				}
+				if err == nil && len(result.IDs) == 0 {
+					errs <- stderrors.New("encode returned empty ids")
+					return
+				}
+			}
+		}()
+	}
+
+	close(start)
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, tok.Close())
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
+func TestConcurrentMixedOperationsAndClose(t *testing.T) {
+	tok := newLifecycleTestTokenizer(t)
+
+	baseline, err := tok.Encode("Mixed lifecycle test text")
+	require.NoError(t, err)
+	require.NotEmpty(t, baseline.IDs)
+
+	const goroutines = 9
+	const iterationsPerGoroutine = 150
+
+	start := make(chan struct{})
+	errs := make(chan error, goroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		workerID := i
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterationsPerGoroutine; j++ {
+				switch workerID % 3 {
+				case 0:
+					result, opErr := tok.Encode("Mixed lifecycle test text")
+					if opErr == nil && len(result.IDs) == 0 {
+						errs <- stderrors.New("mixed encode returned empty ids")
+						return
+					}
+					if opErr != nil && !stderrors.Is(opErr, ErrTokenizerClosed) {
+						errs <- opErr
+						return
+					}
+				case 1:
+					decoded, opErr := tok.Decode(baseline.IDs, false)
+					if opErr == nil && decoded == "" {
+						errs <- stderrors.New("mixed decode returned empty string")
+						return
+					}
+					if opErr != nil && !stderrors.Is(opErr, ErrTokenizerClosed) {
+						errs <- opErr
+						return
+					}
+				default:
+					size, opErr := tok.VocabSize()
+					if opErr == nil && size == 0 {
+						errs <- stderrors.New("mixed vocab size returned zero")
+						return
+					}
+					if opErr != nil && !stderrors.Is(opErr, ErrTokenizerClosed) {
+						errs <- opErr
+						return
+					}
 				}
 			}
 		}()
