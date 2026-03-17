@@ -437,7 +437,7 @@ func (t *Tokenizer) Close() (err error) {
 	if tokenizerh != nil && freeTokenizer != nil {
 		freeTokenizer(tokenizerh)
 	}
-	return nil
+	return
 }
 
 func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult, error) {

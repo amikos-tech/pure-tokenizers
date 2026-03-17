@@ -82,7 +82,7 @@ func TestCloseWaitsForActiveOperations(t *testing.T) {
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Close returned before active operations finished: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	tok.lifecycleMu.RUnlock()
@@ -138,8 +138,12 @@ func TestConcurrentMixedOperationsAndClose(t *testing.T) {
 	baseline, err := tok.Encode("Mixed lifecycle test text")
 	require.NoError(t, err)
 	require.NotEmpty(t, baseline.IDs)
+	pairBaseline, err := tok.EncodePairs([]string{"query"}, []string{"document"})
+	require.NoError(t, err)
+	require.Len(t, pairBaseline, 1)
+	require.NotEmpty(t, pairBaseline[0].IDs)
 
-	const goroutines = 9
+	const goroutines = 12
 	const iterationsPerGoroutine = 150
 
 	start := make(chan struct{})
@@ -153,7 +157,7 @@ func TestConcurrentMixedOperationsAndClose(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for j := 0; j < iterationsPerGoroutine; j++ {
-				switch workerID % 3 {
+				switch workerID % 4 {
 				case 0:
 					result, opErr := tok.Encode("Mixed lifecycle test text")
 					if opErr == nil && len(result.IDs) == 0 {
@@ -174,10 +178,20 @@ func TestConcurrentMixedOperationsAndClose(t *testing.T) {
 						errs <- opErr
 						return
 					}
-				default:
+				case 2:
 					size, opErr := tok.VocabSize()
 					if opErr == nil && size == 0 {
 						errs <- stderrors.New("mixed vocab size returned zero")
+						return
+					}
+					if opErr != nil && !stderrors.Is(opErr, ErrTokenizerClosed) {
+						errs <- opErr
+						return
+					}
+				default:
+					results, opErr := tok.EncodePairs([]string{"query"}, []string{"document"})
+					if opErr == nil && (len(results) != 1 || len(results[0].IDs) == 0) {
+						errs <- stderrors.New("mixed encode pairs returned empty ids")
 						return
 					}
 					if opErr != nil && !stderrors.Is(opErr, ErrTokenizerClosed) {
