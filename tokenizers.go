@@ -3,6 +3,7 @@ package tokenizers
 import (
 	"math"
 	"os"
+	"sync"
 	"unsafe"
 
 	"github.com/Masterminds/semver/v3"
@@ -27,6 +28,9 @@ const (
 	ErrInvalidIDs              = -13
 	ErrInvalidOptions          = -14
 )
+
+// ErrTokenizerClosed is returned when an operation is attempted on a closed tokenizer.
+var ErrTokenizerClosed = errors.New("tokenizer is closed")
 
 // AbiCompatibilityConstraint defines the required version range for ABI compatibility.
 // The library version from Cargo.toml is used as the ABI version.
@@ -218,6 +222,8 @@ func WithPadding(enabled bool, strategy PaddingStrategy) TokenizerOption {
 }
 
 type Tokenizer struct {
+	lifecycleMu         sync.RWMutex
+	closed              bool
 	LibraryPath         string // Path to the shared library
 	libh                uintptr
 	tokenizerh          unsafe.Pointer // Pointer to the tokenizer instance
@@ -384,19 +390,63 @@ To resolve this issue:
 	return nil
 }
 
-func (t *Tokenizer) Close() error {
-	if t.tokenizerh != nil {
-		t.freeTokenizer(t.tokenizerh)
-		t.tokenizerh = nil
+func (t *Tokenizer) beginOperation() (func(), error) {
+	t.lifecycleMu.RLock()
+	if t.closed {
+		t.lifecycleMu.RUnlock()
+		return nil, ErrTokenizerClosed
 	}
-	err := closeLibrary(t.libh)
-	if err != nil {
-		return errors.Errorf("failed to close shared library: %s", err.Error())
+	return t.lifecycleMu.RUnlock, nil
+}
+
+func (t *Tokenizer) Close() (err error) {
+	t.lifecycleMu.Lock()
+	if t.closed {
+		t.lifecycleMu.Unlock()
+		return nil
 	}
-	return nil
+	t.closed = true
+
+	tokenizerh := t.tokenizerh
+	freeTokenizer := t.freeTokenizer
+	libh := t.libh
+
+	t.tokenizerh = nil
+	t.libh = 0
+	t.fromFile = nil
+	t.fromBytes = nil
+	t.encode = nil
+	t.encodeBatchPairs = nil
+	t.freeTokenizer = nil
+	t.freeBuffer = nil
+	t.freeString = nil
+	t.decode = nil
+	t.vocabSize = nil
+	t.getVersion = nil
+
+	t.lifecycleMu.Unlock()
+
+	if libh != 0 {
+		defer func() {
+			if closeErr := closeLibrary(libh); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}()
+	}
+
+	if tokenizerh != nil && freeTokenizer != nil {
+		freeTokenizer(tokenizerh)
+	}
+	return
 }
 
 func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult, error) {
+	unlock, err := t.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	if t.encode == nil || t.tokenizerh == nil {
 		return nil, errors.New("encode function is not initialized or tokenizer is not loaded")
 	}
@@ -454,6 +504,12 @@ func (t *Tokenizer) Encode(message string, opts ...EncodeOption) (*EncodeResult,
 // EncodePairs encodes multiple sequence pairs in parallel.
 // This is useful for reranking tasks where you need to encode query-document pairs.
 func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...EncodeOption) ([]*EncodeResult, error) {
+	unlock, err := t.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	if t.encodeBatchPairs == nil || t.tokenizerh == nil {
 		return nil, errors.New("encode_batch_pairs function is not initialized or tokenizer is not loaded")
 	}
@@ -504,6 +560,11 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 		lastError := getErrorForCode(rc)
 		return nil, errors.Wrap(lastError, "failed to encode pairs")
 	}
+	defer func() {
+		for i := range buffers {
+			t.freeBuffer(&buffers[i])
+		}
+	}()
 
 	// Convert buffers to results
 	results := make([]*EncodeResult, len(buffers))
@@ -547,9 +608,6 @@ func (t *Tokenizer) EncodePairs(sequences []string, pairs []string, opts ...Enco
 		}
 
 		results[i] = result
-
-		// Free the buffer
-		t.freeBuffer(buff)
 	}
 
 	return results, nil
@@ -566,6 +624,12 @@ func (t *Tokenizer) EncodePair(sequence string, pair string, opts ...EncodeOptio
 }
 
 func (t *Tokenizer) Decode(ids []uint32, skipSpecialTokens bool) (string, error) {
+	unlock, err := t.beginOperation()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
 	if t.decode == nil || t.tokenizerh == nil {
 		return "", errors.New("decode function is not initialized or tokenizer is not loaded")
 	}
@@ -618,6 +682,12 @@ func goStringFromPtr(ptr unsafe.Pointer) string {
 	return string(unsafe.Slice(p, n)) // #nosec G103 -- Converts validated null-terminated FFI buffer into a Go string.
 }
 func (t *Tokenizer) VocabSize() (uint32, error) {
+	unlock, err := t.beginOperation()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
 	if t.vocabSize == nil || t.tokenizerh == nil {
 		return 0, errors.New("vocabSize function is not initialized or tokenizer is not loaded")
 	}
@@ -668,8 +738,15 @@ func getErrorForCode(errCode int32) error {
 	}
 }
 
-// GetLibraryVersion returns the version of the tokenizer library
+// GetLibraryVersion returns the version of the tokenizer library.
+// It returns "unknown" when the version callback is unavailable or the tokenizer is closed.
 func (t *Tokenizer) GetLibraryVersion() string {
+	unlock, err := t.beginOperation()
+	if err != nil {
+		return "unknown"
+	}
+	defer unlock()
+
 	if t.getVersion == nil {
 		return "unknown"
 	}
